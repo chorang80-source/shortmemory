@@ -230,7 +230,8 @@ function initAudio(){
     }catch(e){actx=null}
   }
   if(actx&&actx.state==='suspended')actx.resume();
-  // (영상은 항상 음소거로 재생하므로 재생 허가를 미리 받아 둘 필요가 없음. 예전에 이 확인을 기다리다 시간이 초과되어
+  unlockFb(); // 아이폰: 보조 오디오를 버튼을 누른 이 순간에 한 번 재생해 허가를 받아 둠
+  // (영상은 항상 음소거로 재생하므로 영상의 재생 허가를 미리 받아 둘 필요는 없음. 예전에 이 확인을 기다리다 시간이 초과되어
   //  쓸 수 있는 두 번째 영상 요소를 안 되는 것으로 잘못 판정하던 문제가 있어서 없앰. 안 될 때는 재생 중에 직접 감지해서 바꿈)
 }
 /* 영상은 항상 음소거로 재생하고, 소리는 미리 해독해 둔 오디오(AudioBuffer)를 따로 재생함.
@@ -289,8 +290,41 @@ function prepAudio(list){
     }catch(e){abuf.set(c.id,null)} // 소리가 없거나 해독할 수 없는 파일
   }));
 }
+/* 아이폰 전용 보조 오디오: 소리를 해독하지 못한 클립(앱에서 녹화한 예전 영상 등)의 소리를 영상과 따로 재생.
+   아이폰은 "소리 나는 영상"을 사용자가 직접 시작하지 않으면 막아서(두 번째 영상이 재생되지 않던 원인), 영상은 항상 음소거로 두고
+   소리만 별도 오디오 요소로 재생. 오디오 요소는 버튼을 누른 순간 한 번 재생해 두면 이후 코드로 계속 재생 가능 */
+let isIOS=/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+let fb=null,fbIdx=-1,fbWired=false,fbSilent='';
+function silentWavUrl(){ // 소리 없는 아주 짧은 wav (허가를 받아 두기 위한 재생용)
+  if(fbSilent)return fbSilent;
+  const n=800,b=new ArrayBuffer(44+n*2),v=new DataView(b),w=(o,s)=>{for(let k=0;k<s.length;k++)v.setUint8(o+k,s.charCodeAt(k))};
+  w(0,'RIFF');v.setUint32(4,36+n*2,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,8000,true);v.setUint32(28,16000,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,n*2,true);
+  return fbSilent=URL.createObjectURL(new Blob([b],{type:'audio/wav'}));
+}
+function getFb(){
+  if(!isIOS)return null;
+  if(!fb){fb=new Audio();fb.preload='auto';fb.setAttribute('playsinline','')}
+  if(actx&&!fbWired){fbWired=true;try{const s=actx.createMediaElementSource(fb);s.connect(dest);s.connect(prevGain)}catch(e){}} // 내보내기에도 소리가 들어가도록
+  return fb;
+}
+function unlockFb(){ // 사용자가 버튼을 누른 순간(동기)에 호출
+  const a=getFb();if(!a||unlockFb.done)return;
+  unlockFb.done=true;
+  try{a.src=silentWavUrl();const p=a.play();if(p&&p.catch)p.catch(()=>{unlockFb.done=false})}catch(e){unlockFb.done=false}
+}
 function startClipAudio(i,offset=0,fadeIn=0){
-  const c=clips[i];if(!c||!actx||!hasBuf(c))return false;
+  const c=clips[i];if(!c||!actx)return false;
+  if(!hasBuf(c)){ // 해독한 소리가 없으면 아이폰은 보조 오디오로 재생 (다른 기기는 영상 요소의 소리를 사용하므로 여기서는 하지 않음)
+    const a=c.kind!=='image'?getFb():null;
+    if(!a)return false;
+    try{
+      fbIdx=i;a.src=c.url;a.muted=false;a.volume=1;
+      if(offset>0.05)a.addEventListener('playing',()=>{try{a.currentTime=offset}catch(e){}},{once:true});
+      const p=a.play();if(p&&p.catch)p.catch(()=>{});
+      return true;
+    }catch(e){return false}
+  }
   stopClipAudio(i);
   try{
     const buf=abuf.get(c.id),s=actx.createBufferSource(),g=actx.createGain();
@@ -305,8 +339,14 @@ function fadeOutClipAudio(i,sec){ // 겹치는 동안 앞 클립의 소리는 �
   const o=liveAudio.get(i);if(!o||!actx)return;
   try{const n=actx.currentTime;o.g.gain.cancelScheduledValues(n);o.g.gain.setValueAtTime(o.g.gain.value,n);o.g.gain.linearRampToValueAtTime(0,n+sec)}catch(e){}
 }
-function stopClipAudio(i){const o=liveAudio.get(i);if(o){try{o.s.onended=null;o.s.stop()}catch(e){}liveAudio.delete(i)}}
-function stopAllAudio(){[...liveAudio.keys()].forEach(stopClipAudio)}
+function stopClipAudio(i){
+  if(fb&&fbIdx===i){try{fb.pause()}catch(e){}fbIdx=-1}
+  const o=liveAudio.get(i);if(o){try{o.s.onended=null;o.s.stop()}catch(e){}liveAudio.delete(i)}
+}
+function stopAllAudio(){
+  if(fb){try{fb.pause()}catch(e){}fbIdx=-1}
+  [...liveAudio.keys()].forEach(stopClipAudio);
+}
 function pickMime(){
   const c=['video/mp4;codecs=avc1,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
   return window.MediaRecorder?c.find(m=>MediaRecorder.isTypeSupported(m))||'':'';
@@ -598,8 +638,7 @@ function leadSec(){
 }
 /* 아이폰은 사용자가 직접 시작하지 않은 영상의 소리 재생을 막아서 시도하면 거부된 뒤 다시 시도하느라 멈춤 → 영상은 항상 음소거,
    소리는 해독한 오디오로만 재생 (해독하지 못한 클립은 무음). 다른 기기는 해독하지 못한 클립만 영상 요소의 소리를 사용 */
-const isIOS=/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
-const elMuted=clip=>hasBuf(clip); // 소리를 따로 해독한(또는 녹음해 둔) 클립만 영상을 음소거. 아닌 클립은 영상 요소의 소리를 사용
+const elMuted=clip=>isIOS||hasBuf(clip); // 아이폰은 영상을 항상 음소거(소리는 오디오로 따로). 다른 기기는 해독한 소리가 없는 클립만 영상 요소의 소리를 사용
 const diag={transitions:[]}; // 진단: 가장 최근 재생에서 클립 사이마다 두 영상이 멈춰 있던 시간 등
 let prevEndAt=0; // 앞 클립이 끝난 시각 (다음 클립이 실제로 움직이기까지 걸린 시간을 재기 위함)
 function startPreroll(idx){
@@ -1174,7 +1213,7 @@ function diagText(){
   L.push(`영상 요소: ${useSingle?'하나만 사용(안전 모드)':'두 개 사용(겹쳐 재생)'}${useSingle&&diagInfo.single?' — 이유: '+diagInfo.single:''}`);
   L.push(`전환: ${TRANS.find(x=>x[0]===trKind)[1]} / 겹침 ${overlapLen()}초`);
   L.push(`클립: 영상 ${v}개, 사진 ${p}개 (길이 ${clips.map(c=>(+c.dur||0).toFixed(1)).join(', ')}초)`);
-  L.push(`소리 준비: ${clips.filter(c=>c.kind!=='image').map(c=>hasBuf(c)?(c.pcm?'성공(녹음)':'성공(해독)'):(abuf.get(c.id)==='pending'?'진행중':'실패→영상 소리 사용')).join(', ')||'-'}`);
+  L.push(`소리 준비: ${clips.filter(c=>c.kind!=='image').map(c=>hasBuf(c)?(c.pcm?'성공(녹음)':'성공(해독)'):(abuf.get(c.id)==='pending'?'진행중':(isIOS?'실패→보조 오디오':'실패→영상 소리 사용'))).join(', ')||'-'}`);
   L.push(`영상 시작 지연(ms): ${lagSamples.map(Math.round).join(', ')||'아직 측정 전'} → 미리 출발 ${Math.round(leadSec()*1000)}ms 전`);
   L.push(`미리보기 화질: ${Math.round(W*S)}x${Math.round(H*S)}`);
   L.push('');
