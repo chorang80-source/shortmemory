@@ -1,6 +1,6 @@
 // 추억은방울방울 서비스 워커: 앱 파일은 네트워크 우선(업데이트 즉시 반영), 오프라인이면 캐시. 글꼴은 캐시해 두고 재사용.
-const V = 'bangul-v1';
-const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+const V = 'bangul-v3';
+const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png?v=3', './icon-512.png?v=3'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(V).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));
