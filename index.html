@@ -344,6 +344,29 @@ function preloadNext(i){
   if(spareIdx===i)return;
   spareIdx=i;spare.pause();spare.muted=false;spare.preload='auto';spare.src=c.url;spare.load();
 }
+/* 다음 클립 미리 출발: 영상은 play() 호출 뒤 실제로 움직이기까지 지연이 있어서(휴대폰에서 특히 큼),
+   그 지연만큼 먼저 spare를 재생해 두었다가 교대하면 클립 시작 때 멈추지 않음. 지연은 실측해서 자동 보정 */
+let prerolledIdx=-1;
+const lagSamples=[];
+function leadSec(){
+  if(!lagSamples.length)return 0.25;
+  const avg=lagSamples.reduce((a,b)=>a+b,0)/lagSamples.length;
+  return Math.min(700,Math.max(50,avg+40))/1000;
+}
+function startPreroll(idx){
+  const v=spare,p0=performance.now();
+  prerolledIdx=idx;v.muted=false;
+  const onPlaying=()=>{
+    v.removeEventListener('playing',onPlaying);
+    lagSamples.push(performance.now()-p0);
+    if(lagSamples.length>4)lagSamples.shift();
+  };
+  v.addEventListener('playing',onPlaying);
+  try{
+    const pr=v.play();
+    if(pr&&pr.catch)pr.catch(()=>{prerolledIdx=-1;v.removeEventListener('playing',onPlaying)});
+  }catch(e){prerolledIdx=-1;v.removeEventListener('playing',onPlaying)}
+}
 const fmt=s=>{s=Math.max(0,Math.round(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
 const totalDur=()=>clips.reduce((s,c)=>s+(c.dur||0),0);
 function updateProgress(i,t){
@@ -357,18 +380,27 @@ function updateProgress(i,t){
 async function playRange(from,only){
   const token=++runToken;
   const last=only?from:clips.length-1;
+  prerolledIdx=-1;
+  // 재생할 모든 클립의 글꼴을 시작 전에 한꺼번에 준비 → 클립이 바뀔 때마다 글꼴을 기다리지 않음
+  await withTimeout(ensureFonts(clips.slice(from,last+1).flatMap(c=>c.texts)),4000);
   for(let i=from;i<=last;i++){
     if(token!==runToken)return 'cancel';
     await loadClip(i); // 미리 불러둔 영상이면 즉시 교대
     vid.muted=false;
-    await withTimeout(ensureFonts(clips[i].texts),1500); // 글꼴이 늦어도 멈추지 않게
     if(token!==runToken)return 'cancel';
     if(actx&&actx.state!=='running'){try{await withTimeout(actx.resume(),800)}catch(e){}}
     const isImg=clips[i].kind==='image';
-    if(!isImg){
+    const wasPre=prerolledIdx===i; // 이미 미리 출발해 재생 중인 영상이면 다시 시작하지 않음
+    prerolledIdx=-1;
+    if(!isImg&&!wasPre){
       try{if(vid.currentTime>0.01)vid.currentTime=0}catch(e){}
       let started=true;
-      try{await withTimeout(vid.play(),3000)}
+      const p0=performance.now();
+      try{
+        await withTimeout(vid.play(),3000);
+        // 재생 시작 지연을 재 두어 첫 전환부터 미리 출발 시점에 반영
+        lagSamples.push(performance.now()-p0);if(lagSamples.length>4)lagSamples.shift();
+      }
       catch(e){
         // 자동재생 차단 등: 미리보기에서만 음소거로 한 번 더 시도
         started=false;
@@ -378,9 +410,15 @@ async function playRange(from,only){
     }
     if(i<last)preloadNext(i+1); // 지금 클립이 재생되는 동안 다음 클립 준비
     await new Promise(res=>{
-      let finished=false,lastT=-1,lastAdv=performance.now(),stalls=0,gen=0;
+      let finished=false,lastT=-1,lastAdv=performance.now(),stalls=0,gen=0,pre=false,preTimer=null;
       const tStart=performance.now(); // 사진 클립은 시계로 길이를 잼
-      const finish=()=>{if(finished)return;finished=true;vid.removeEventListener('ended',finish);res()};
+      const finish=()=>{if(finished)return;finished=true;clearTimeout(preTimer);vid.removeEventListener('ended',finish);res()};
+      // 다음 영상 미리 출발 (준비가 안 됐으면 false)
+      const tryPre=()=>{
+        if(pre||finished||token!==runToken)return false;
+        if(i>=last||clips[i+1].kind==='image'||spareIdx!==i+1||spare.readyState<2)return false;
+        pre=true;startPreroll(i+1);return true;
+      };
       vid.addEventListener('ended',finish);
       // rAF와 타이머를 함께 걸어 두고 먼저 오는 쪽만 실행 (화면이 가려져 rAF가 멈춰도 다음 클립으로 넘어가도록)
       const step=g=>{
@@ -399,6 +437,12 @@ async function playRange(from,only){
             if(d>0&&t>=d+1){finish();return} // ended 신호가 오지 않을 때의 안전장치
             const end=isFinite(vid.duration)?vid.duration:(d||Infinity);
             if(vid.paused&&t>0&&t>=end-0.35){finish();return} // 끝에서 멈췄는데 ended가 안 온 경우
+            // 끝나기 직전에 다음 영상을 미리 출발시킴. 화면 갱신이 느려도 제때 출발하도록 타이머를 직접 걸어 둠
+            if(!pre){
+              const remain=end-t-leadSec();
+              if(remain<=0)tryPre();
+              else if(!preTimer&&isFinite(remain)){preTimer=setTimeout(()=>{preTimer=null;if(!tryPre())preTimer=null},Math.max(0,remain*1000-5))}
+            }
             const now=performance.now();
             if(t!==lastT){lastT=t;lastAdv=now}
             else if(now-lastAdv>3000){ // 3초 동안 시간이 안 흐르면 재시도 → 그래도 멈추면 다음 클립으로
@@ -417,7 +461,7 @@ async function playRange(from,only){
   }
   return token===runToken?'done':'cancel';
 }
-function stopPlay(){runToken++;vids.forEach(v=>v.pause());playing=false;setPlayUI()}
+function stopPlay(){runToken++;prerolledIdx=-1;vids.forEach(v=>v.pause());playing=false;setPlayUI()}
 function setPlayUI(){$('#btnPlay').textContent=playing?'⏸':'▶'}
 async function togglePlay(only){
   initAudio();
