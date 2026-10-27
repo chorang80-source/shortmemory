@@ -123,6 +123,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
   <div class="row" id="tabs"></div>
   <div class="lbl">💡 위쪽 영상 화면에서 글자를 손가락으로 끌어 옮길 수 있어요</div>
   <textarea id="fText" rows="2" placeholder="자막 내용 (줄바꿈 가능)"></textarea>
+  <div class="row"><label style="display:block;width:100%">⏱ 표시 범위 (이 클립부터) <select id="fSpan" style="width:100%;margin-top:4px"></select></label></div>
   <div class="lbl">글꼴</div><div class="chips" id="fontChips"></div>
   <div class="lbl">효과</div><div class="chips" id="fxChips"></div>
   <div class="grid">
@@ -338,7 +339,30 @@ function drawFrame(clip,t,settled){
     const dw=vw*s,dh=vh*s;
     ctx.drawImage(src,(W-dw)/2,(H-dh)/2,dw,dh);
   }
-  if(clip)clip.texts.forEach(l=>drawLayer(l,settled?l.delay+10:t));
+  if(clip){
+    const k=clips.indexOf(clip);
+    if(k<0)clip.texts.forEach(l=>drawLayer(l,settled?l.delay+10:t));
+    else for(const [l,j] of layersFor(k)){
+      // 앞 클립에서 시작한 텍스트는 전체 영상 시간으로 이어서 계산 → 클립이 바뀌어도 효과가 다시 시작되지 않고 그대로 유지
+      drawLayer(l,settled?l.delay+10:(j===k?t:tlAt(k)-tlAt(j)+t));
+    }
+  }
+}
+/* 텍스트는 처음 나타난 클립(j)에서 시작해 span개 클립 동안(또는 끝까지) 이어서 표시됨 */
+function layersFor(k){
+  const out=[];
+  for(let j=0;j<=k;j++){
+    for(const l of clips[j].texts){
+      if(j===k||l.toEnd||k<=j+(l.span||1)-1)out.push([l,j]);
+    }
+  }
+  return out;
+}
+/* 재생 중 각 클립이 전체 영상에서 시작한 시각(초). 재생하지 않을 때는 클립 길이를 더해서 추정 */
+let tlStart=[];
+function tlAt(i){
+  if(tlStart[i]!==undefined)return tlStart[i];
+  let s=0;for(let k=0;k<i;k++)s+=clips[k].dur||0;return s;
 }
 const redraw=()=>{if(cur>=0&&clips[cur])drawFrame(clips[cur],0,true)};
 
@@ -408,8 +432,9 @@ function updateProgress(i,t){
 /* 반환: 'done'(끝까지 재생) | 'cancel'(중지·취소됨) | 'fail'(재생 시작 실패) */
 async function playRange(from,only){
   const token=++runToken;
-  const last=only?from:clips.length-1;
+  const last=typeof only==='number'?only:(only?from:clips.length-1); // only: true=이 클립만, 숫자=그 클립까지
   prerolledIdx=-1;
+  const base=tlAt(from);tlStart=[];tlStart[from]=base; // 전체 영상 시간 기록 시작 (일부만 재생해도 앞 클립 길이만큼 이어진 상태로 시작)
   // 재생할 모든 클립의 글꼴을 시작 전에 한꺼번에 준비 → 클립이 바뀔 때마다 글꼴을 기다리지 않음
   await withTimeout(ensureFonts(clips.slice(from,last+1).flatMap(c=>c.texts)),4000);
   // 두 번째 영상 요소가 실제로 재생되는지 먼저 확인. 안 되면 처음부터 안전한 단일 요소 모드
@@ -448,7 +473,7 @@ async function playRange(from,only){
       if(!started){toast(`클립 ${i+1} 재생을 시작하지 못했어요`);return 'fail'}
     }
     if(i<last)preloadNext(i+1); // 지금 클립이 재생되는 동안 다음 클립 준비
-    let retry=false;
+    let retry=false,endT=0;
     await new Promise(res=>{
       let finished=false,lastT=-1,lastAdv=performance.now(),stalls=0,gen=0,pre=false,preTimer=null;
       const tStart=performance.now(); // 사진 클립은 시계로 길이를 잼
@@ -467,6 +492,7 @@ async function playRange(from,only){
         if(token!==runToken){finish();return}
         try{
           const t=isImg?(performance.now()-tStart)/1000:vid.currentTime;
+          endT=t;
           drawFrame(clips[i],t);
           updateProgress(i,t);
           if(isImg){
@@ -503,6 +529,8 @@ async function playRange(from,only){
       step(gen);
     });
     if(retry&&token===runToken){i--;continue} // 같은 클립을 단일 모드로 다시
+    // 다음 클립은 이 클립이 실제로 끝난 시각에서 이어서 시작 (이어 표시되는 텍스트의 효과 시간이 끊기지 않게)
+    tlStart[i+1]=tlAt(i)+(isImg?clips[i].dur:(endT>0?endT:(clips[i].dur||0)));
   }
   return token===runToken?'done':'cancel';
 }
@@ -539,7 +567,7 @@ function renderList(){
   clips.forEach((c,i)=>{
     const d=document.createElement('div');d.className='card'+(i===cur?' sel':'');
     d.innerHTML=`${c.thumb?`<img src="${c.thumb}">`:'<div class="noimg"></div>'}
-      <div class="meta"><b>#${i+1} · ${c.dur?c.dur.toFixed(1)+'초':'?'}${c.kind==='image'?' · 🖼 사진':''}</b><span>${c.texts.length?c.texts.map(t=>t.text.replace(/\n/g,' ')).join(' / '):'텍스트 없음'}</span></div>
+      <div class="meta"><b>#${i+1} · ${c.dur?c.dur.toFixed(1)+'초':'?'}${c.kind==='image'?' · 🖼 사진':''}</b><span>${c.texts.length?c.texts.map(t=>t.text.replace(/\n/g,' ')+(t.toEnd?' ➜끝까지':((t.span||1)>1?' ➜'+t.span+'개':''))).join(' / '):'텍스트 없음'}</span></div>
       <div class="btns"><button data-a="up">▲</button><button data-a="down">▼</button><button data-a="edit">✎</button><button data-a="del">🗑</button></div>`;
     d.onclick=e=>{
       const a=e.target.dataset.a;
@@ -684,7 +712,16 @@ function syncSheet(){
   const add=document.createElement('button');add.textContent='＋ 텍스트 추가';add.onclick=()=>{const n=newLayer();if(c.texts.length)n.y=Math.max(10,c.texts[c.texts.length-1].y-15);c.texts.push(n);li=c.texts.length-1;syncSheet();changed(true)};tabs.appendChild(add);
   const l=layer();
   $('#fText').disabled=!l;
+  // 표시 범위: 이 클립만 / N개 클립 동안 / 끝까지. 한 번 나타난 텍스트는 효과를 다시 시작하지 않고 그대로 이어서 표시됨
+  const sp=$('#fSpan'),rem=clips.length-ei;
+  sp.innerHTML='';sp.disabled=!l;
+  for(let n=1;n<=rem;n++){
+    const o=document.createElement('option');o.value=n;
+    o.textContent=n===1?'이 클립만':(n===rem?`끝까지 (마지막 클립까지 ${n}개)`:`${n}개 클립 동안 이어서`);
+    sp.appendChild(o);
+  }
   if(!l)return;
+  sp.value=l.toEnd?rem:Math.min(l.span||1,rem);
   $('#fText').value=l.text;$('#fSize').value=l.size;$('#fY').value=l.y;$('#fDelay').value=l.delay;$('#fSw').value=l.sw;
   $('#fColor').value=l.color;$('#fStroke').value=l.stroke;$('#fBox').checked=l.box;
   document.querySelectorAll('#fontChips button').forEach(b=>b.classList.toggle('on',b.dataset.f===l.font));
@@ -740,6 +777,7 @@ $('#fDel').onclick=()=>{const c=clips[ei];if(!c||!c.texts.length)return;c.texts.
 /* 글자와 스타일을 함께, 다른 모든 클립의 같은 번호(T1이면 T1) 텍스트로 적용. 그 번호의 텍스트가 없는 클립에는 새로 추가 */
 $('#fAll').onclick=()=>{
   const l=layer();if(!l||!l.text)return;
+  if(l.toEnd||(l.span||1)>1){toast('이 텍스트는 이미 여러 클립에 이어서 표시돼요 (복사하면 중복돼요)');return}
   const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
   const others=clips.filter(c=>c!==clips[ei]);
   const replace=others.filter(c=>c.texts[li]&&!same(c.texts[li],l)); // 기존 텍스트를 덮어쓸 클립
@@ -752,12 +790,21 @@ $('#fAll').onclick=()=>{
   renderListKeep();
   toast(`다른 클립 ${replace.length+add.length}개에 적용했어요`);
 };
+$('#fSpan').addEventListener('change',e=>{
+  const l=layer();if(!l)return;
+  const rem=clips.length-ei,n=parseInt(e.target.value,10)||1;
+  l.span=n;l.toEnd=(n===rem&&rem>1); // 끝까지를 고르면 클립이 더 추가돼도 계속 끝까지 이어짐
+  changed();
+});
 $('#fPlay').onclick=()=>togglePlayOnce();
 async function togglePlayOnce(){
   if(playing){stopPlay()}
   initAudio();if(prevGain)prevGain.gain.value=1;
   playing=true;setPlayUI();
-  const r=await playRange(ei,true);
+  // 미리보기는 이 텍스트가 표시되는 범위(여러 클립에 이어지면 그 끝까지)를 재생해서 이어지는 모습을 확인
+  const l0=layer();
+  const endIdx=l0?(l0.toEnd?clips.length-1:Math.min(clips.length-1,ei+(l0.span||1)-1)):ei;
+  const r=await playRange(ei,endIdx);
   if(r==='cancel')return;
   playing=false;setPlayUI();
   if(r==='done')await selectClip(ei);
