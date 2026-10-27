@@ -160,6 +160,17 @@ const cv=$('#cv'),ctx=cv.getContext('2d');
 // 영상 요소 2개를 번갈아 사용: 재생 중인 vid, 다음 클립을 미리 불러두는 spare
 const vids=[$('#vid'),$('#vid2')];
 let vid=vids[0],spare=vids[1],spareIdx=-1;
+/* 일부 휴대폰(특히 iOS)은 사용자가 직접 시작하지 않은 두 번째 영상 요소의 자동 재생을 막음.
+   그런 기기에서는 영상 요소 하나만 쓰는 모드로 자동 전환하고(다음 실행부터 기억), 끊김보다 안정성을 우선 */
+let useSingle=false;
+try{useSingle=localStorage.getItem('single')==='1'}catch(e){}
+function enterSingle(why,persist=true){
+  useSingle=true;
+  if(persist){try{localStorage.setItem('single','1')}catch(e){}}
+  vid=vids[0];spare=vids[1];spareIdx=-1;prerolledIdx=-1;
+  try{spare.pause()}catch(e){}
+  console.warn('단일 영상 모드:',why);
+}
 const img=new Image(); // 사진 클립용
 let S=1; // 해상도 배율 (논리 좌표는 항상 720x1280)
 function setRes(s){S=s;cv.width=Math.round(W*s);cv.height=Math.round(H*s)}
@@ -202,14 +213,15 @@ function initAudio(){
   unlockSpare();
 }
 /* iOS Safari: 두 번째 영상 요소도 사용자 터치 안에서 한 번 재생해 둬야 이후 자동 재생이 허용됨 */
-function unlockSpare(){
+function unlockSpare(){ // 재생 허용 여부(true/false)를 담은 Promise를 돌려줌
+  if(unlockSpare.p)return unlockSpare.p;
+  if(useSingle)return Promise.resolve(false);
   try{
-    if(unlockSpare.done)return;
-    const first=clips.find(c=>c.kind!=='image');if(!first)return;
-    unlockSpare.done=true;
+    const first=clips.find(c=>c.kind!=='image');if(!first)return Promise.resolve(false);
     const v=spare;spareIdx=-1;v.muted=true;v.src=first.url;
-    v.play().then(()=>{if(v===spare)v.pause();v.muted=false}).catch(()=>{v.muted=false});
-  }catch(e){}
+    unlockSpare.p=v.play().then(()=>{if(v===spare)v.pause();v.muted=false;return true}).catch(()=>{v.muted=false;return false});
+    return unlockSpare.p;
+  }catch(e){return Promise.resolve(false)}
 }
 function pickMime(){
   const c=['video/mp4;codecs=avc1,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
@@ -324,7 +336,7 @@ function loadClip(i){
     return new Promise(res=>{img.onload=img.onerror=()=>res();img.src=c0.url;setTimeout(res,3000)});
   }
   // 미리 불러둔 영상이 있으면 요소를 맞바꿔 바로 사용 (끊김 없는 전환)
-  if(spareIdx===i&&spare.readyState>=2){
+  if(!useSingle&&spareIdx===i&&spare.readyState>=2){
     const old=vid;vid=spare;spare=old;spareIdx=-1;cur=i;old.pause();
     return Promise.resolve();
   }
@@ -341,7 +353,7 @@ function preloadNext(i){
   const c=clips[i];if(!c)return;
   ensureFonts(c.texts);
   if(c.kind==='image'){const p=new Image();p.src=c.url;if(p.decode)p.decode().catch(()=>{});return}
-  if(spareIdx===i)return;
+  if(useSingle||spareIdx===i)return;
   spareIdx=i;spare.pause();spare.muted=false;spare.preload='auto';spare.src=c.url;spare.load();
 }
 /* 다음 클립 미리 출발: 영상은 play() 호출 뒤 실제로 움직이기까지 지연이 있어서(휴대폰에서 특히 큼),
@@ -383,6 +395,12 @@ async function playRange(from,only){
   prerolledIdx=-1;
   // 재생할 모든 클립의 글꼴을 시작 전에 한꺼번에 준비 → 클립이 바뀔 때마다 글꼴을 기다리지 않음
   await withTimeout(ensureFonts(clips.slice(from,last+1).flatMap(c=>c.texts)),4000);
+  // 두 번째 영상 요소가 실제로 재생되는지 먼저 확인. 안 되면 처음부터 안전한 단일 요소 모드
+  if(!useSingle&&clips.slice(from,last+1).filter(c=>c.kind!=='image').length>1){
+    const ok=await withTimeout(unlockSpare(),1500);
+    if(ok!==true&&!useSingle)enterSingle('두 번째 영상 요소 재생 확인 '+(ok===false?'실패':'지연'),ok===false);
+    if(token!==runToken)return 'cancel';
+  }
   for(let i=from;i<=last;i++){
     if(token!==runToken)return 'cancel';
     await loadClip(i); // 미리 불러둔 영상이면 즉시 교대
@@ -394,12 +412,13 @@ async function playRange(from,only){
     prerolledIdx=-1;
     if(!isImg&&!wasPre){
       try{if(vid.currentTime>0.01)vid.currentTime=0}catch(e){}
-      let started=true;
+      let started=true,played=false;
       const p0=performance.now();
       try{
-        await withTimeout(vid.play(),3000);
+        // 두 번째 요소는 시작하지 못하는 기기가 있어 대기를 짧게 하고, 못 시작하면 아래에서 단일 모드로 복구
+        await withTimeout(Promise.resolve(vid.play()).then(()=>{played=true}),vid===vids[0]?3000:1200);
         // 재생 시작 지연을 재 두어 첫 전환부터 미리 출발 시점에 반영
-        lagSamples.push(performance.now()-p0);if(lagSamples.length>4)lagSamples.shift();
+        if(played){lagSamples.push(performance.now()-p0);if(lagSamples.length>4)lagSamples.shift()}
       }
       catch(e){
         // 자동재생 차단 등: 미리보기에서만 음소거로 한 번 더 시도
@@ -409,6 +428,7 @@ async function playRange(from,only){
       if(!started){toast(`클립 ${i+1} 재생을 시작하지 못했어요`);return 'fail'}
     }
     if(i<last)preloadNext(i+1); // 지금 클립이 재생되는 동안 다음 클립 준비
+    let retry=false;
     await new Promise(res=>{
       let finished=false,lastT=-1,lastAdv=performance.now(),stalls=0,gen=0,pre=false,preTimer=null;
       const tStart=performance.now(); // 사진 클립은 시계로 길이를 잼
@@ -416,7 +436,7 @@ async function playRange(from,only){
       // 다음 영상 미리 출발 (준비가 안 됐으면 false)
       const tryPre=()=>{
         if(pre||finished||token!==runToken)return false;
-        if(i>=last||clips[i+1].kind==='image'||spareIdx!==i+1||spare.readyState<2)return false;
+        if(useSingle||i>=last||clips[i+1].kind==='image'||spareIdx!==i+1||spare.readyState<2)return false;
         pre=true;startPreroll(i+1);return true;
       };
       vid.addEventListener('ended',finish);
@@ -445,6 +465,10 @@ async function playRange(from,only){
             }
             const now=performance.now();
             if(t!==lastT){lastT=t;lastAdv=now}
+            else if(vid!==vids[0]&&!useSingle&&now-lastAdv>1200){
+              // 두 번째 영상 요소가 시작하지 못함 → 단일 요소 모드로 바꾸고 이 클립을 처음부터 다시 재생
+              retry=true;finish();enterSingle('두 번째 영상 요소가 재생되지 않음');return;
+            }
             else if(now-lastAdv>3000){ // 3초 동안 시간이 안 흐르면 재시도 → 그래도 멈추면 다음 클립으로
               stalls++;lastAdv=now;
               if(stalls>=2){toast(`클립 ${i+1}이 멈춰서 다음으로 넘어가요`);finish();return}
@@ -458,6 +482,7 @@ async function playRange(from,only){
       };
       step(gen);
     });
+    if(retry&&token===runToken){i--;continue} // 같은 클립을 단일 모드로 다시
   }
   return token===runToken?'done':'cancel';
 }
