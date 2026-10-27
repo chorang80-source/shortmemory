@@ -137,7 +137,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
     <label><input type="checkbox" id="fBox"> 배경 박스</label>
   </div>
   <div class="lbl">모든 클립에 한꺼번에</div>
-  <div class="row"><button id="fAllAdd">📋 이 텍스트를 모든 클립에 추가</button><button id="fAllStyle">🎨 이 스타일을 모든 클립에 적용</button></div>
+  <div class="row"><button id="fAll">📋 이 텍스트(글자+스타일)를 모든 클립에 적용</button></div>
   <div class="row"><button id="fPlay">▶ 효과 미리보기</button><button id="fDel">이 텍스트 삭제</button></div>
 </div>
 
@@ -210,18 +210,26 @@ function initAudio(){
     }catch(e){actx=null}
   }
   if(actx&&actx.state==='suspended')actx.resume();
-  unlockSpare();
+  blessAll(); // 반드시 사용자가 버튼을 누른 그 순간(동기)에 호출
 }
-/* iOS Safari: 두 번째 영상 요소도 사용자 터치 안에서 한 번 재생해 둬야 이후 자동 재생이 허용됨 */
-function unlockSpare(){ // 재생 허용 여부(true/false)를 담은 Promise를 돌려줌
-  if(unlockSpare.p)return unlockSpare.p;
-  if(useSingle)return Promise.resolve(false);
-  try{
-    const first=clips.find(c=>c.kind!=='image');if(!first)return Promise.resolve(false);
-    const v=spare;spareIdx=-1;v.muted=true;v.src=first.url;
-    unlockSpare.p=v.play().then(()=>{if(v===spare)v.pause();v.muted=false;return true}).catch(()=>{v.muted=false;return false});
-    return unlockSpare.p;
-  }catch(e){return Promise.resolve(false)}
+/* iOS Safari 등: 영상 재생은 사용자가 버튼을 누른 직후에만 허용되고, 그 사이에 글꼴·파일 로딩 같은 대기가 끼면 거부됨.
+   그래서 버튼을 누르는 순간 두 영상 요소를 한 번씩 재생해 "재생 허가"를 받아 두면 이후 자동 재생이 가능.
+   결과는 [첫째 요소 성공 여부, 둘째 요소 성공 여부] 배열을 담은 Promise */
+function blessAll(){
+  if(blessAll.p)return blessAll.p;
+  const first=clips.find(c=>c.kind!=='image');
+  if(!first)return Promise.resolve([false,false]); // 영상 클립이 아직 없으면 다음 기회에
+  const gain=prevGain;if(gain)gain.gain.value=0; // 허가용 재생의 소리가 새어 나오지 않게
+  spareIdx=-1;
+  const ps=vids.map(v=>{
+    try{
+      if(!v.src)v.src=first.url;
+      v.muted=false;
+      return Promise.resolve(v.play()).then(()=>{v.pause();return true}).catch(()=>false);
+    }catch(e){return Promise.resolve(false)}
+  });
+  blessAll.p=Promise.all(ps).then(r=>{if(gain)gain.gain.value=exporting?0:1;return r});
+  return blessAll.p;
 }
 function pickMime(){
   const c=['video/mp4;codecs=avc1,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
@@ -231,8 +239,13 @@ function pickMime(){
 /* ---------- 저장소(IndexedDB) ---------- */
 const dbp=new Promise((ok,no)=>{
   try{
-    const r=indexedDB.open('clipvlog',1);
-    r.onupgradeneeded=()=>{r.result.createObjectStore('clips',{keyPath:'id'});r.result.createObjectStore('meta')};
+    const r=indexedDB.open('clipvlog',2);
+    r.onupgradeneeded=()=>{
+      const db=r.result;
+      if(!db.objectStoreNames.contains('clips'))db.createObjectStore('clips',{keyPath:'id'});
+      if(!db.objectStoreNames.contains('meta'))db.createObjectStore('meta');
+      if(!db.objectStoreNames.contains('cmeta'))db.createObjectStore('cmeta',{keyPath:'id'}); // 텍스트·길이 같은 가벼운 정보
+    };
     r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error);
   }catch(e){no(e)}
 });
@@ -242,9 +255,11 @@ async function dbTx(store,fn){
     return await new Promise((res,rej)=>{const tx=db.transaction(store,'readwrite');const out=fn(tx);tx.oncomplete=()=>res(out&&out.result);tx.onerror=()=>rej(tx.error)});
   }catch(e){}
 }
-const saveClip=c=>dbTx('clips',tx=>tx.objectStore('clips').put({id:c.id,blob:c.blob,dur:c.dur,thumb:c.thumb,texts:c.texts,kind:c.kind||'video'}));
+// 영상·사진 파일(큰 데이터)은 클립을 추가할 때 한 번만 저장하고, 텍스트 편집은 가벼운 정보만 저장 (휴대폰에서 매번 파일을 다시 쓰면 느려지고 멈출 수 있음)
+const saveBlob=c=>dbTx('clips',tx=>tx.objectStore('clips').put({id:c.id,blob:c.blob,dur:c.dur,thumb:c.thumb,texts:c.texts,kind:c.kind||'video'}));
+const saveClip=c=>dbTx('cmeta',tx=>tx.objectStore('cmeta').put({id:c.id,texts:c.texts,dur:c.dur}));
 const saveOrder=()=>dbTx('meta',tx=>tx.objectStore('meta').put(clips.map(c=>c.id),'order'));
-const delClip=id=>dbTx('clips',tx=>tx.objectStore('clips').delete(id));
+const delClip=id=>dbTx(['clips','cmeta'],tx=>{tx.objectStore('clips').delete(id);tx.objectStore('cmeta').delete(id)});
 let st;const saveSoon=c=>{clearTimeout(st);st=setTimeout(()=>saveClip(c),500)};
 async function loadAll(){
   try{
@@ -253,7 +268,9 @@ async function loadAll(){
     const order=(await get('meta','order'))||[];
     for(const id of order){
       const r=await get('clips',id);
-      if(r)clips.push({...r,url:URL.createObjectURL(r.blob)});
+      if(!r)continue;
+      const m=await get('cmeta',id); // 있으면 가장 최근 텍스트·길이로 덮어씀 (이전 버전 데이터와도 호환)
+      clips.push({...r,...(m?{texts:m.texts,dur:m.dur}:{}),url:URL.createObjectURL(r.blob)});
     }
   }catch(e){}
 }
@@ -397,8 +414,11 @@ async function playRange(from,only){
   await withTimeout(ensureFonts(clips.slice(from,last+1).flatMap(c=>c.texts)),4000);
   // 두 번째 영상 요소가 실제로 재생되는지 먼저 확인. 안 되면 처음부터 안전한 단일 요소 모드
   if(!useSingle&&clips.slice(from,last+1).filter(c=>c.kind!=='image').length>1){
-    const ok=await withTimeout(unlockSpare(),1500);
-    if(ok!==true&&!useSingle)enterSingle('두 번째 영상 요소 재생 확인 '+(ok===false?'실패':'지연'),ok===false);
+    const b=await withTimeout(blessAll(),1500);
+    if(token!==runToken)return 'cancel';
+    if(!useSingle&&(!b||b[1]!==true))enterSingle('두 번째 영상 요소 재생 확인 '+(b?'실패':'지연'),!!b);
+  }else{
+    await withTimeout(blessAll(),1500); // 클립이 하나뿐이어도 허가 확인이 끝난 뒤 재생 시작
     if(token!==runToken)return 'cancel';
   }
   for(let i=from;i<=last;i++){
@@ -494,17 +514,18 @@ async function togglePlay(only){
   if(!clips.length)return;
   if(prevGain)prevGain.gain.value=1;
   playing=true;setPlayUI();
-  const r=await playRange(Math.max(0,cur),only===true);
+  // ▶는 항상 처음부터 전체 재생 (편집하느라 마지막 클립이 선택된 상태에서 누르면 그 클립만 재생되던 문제)
+  const r=await playRange(0,false);
   if(r==='cancel')return; // 중지·재시작된 경우 새 재생이 상태를 관리
   playing=false;setPlayUI();
-  if(r==='done')await selectClip(only===true?cur:0);
+  if(r==='done')await selectClip(0);
 }
 async function selectClip(i){
   if(playing)stopPlay();
   if(i<0||i>=clips.length){cur=-1;drawFrame(null,0);renderList();return}
   await loadClip(i);
   if(clips[i].kind!=='image')await new Promise(r=>{vid.addEventListener('seeked',r,{once:true});try{vid.currentTime=0.05}catch(e){}setTimeout(r,500)});
-  await ensureFonts(clips[i].texts);
+  await withTimeout(ensureFonts(clips[i].texts),2000); // 글꼴이 안 불러와져도 화면이 멈추지 않게
   drawFrame(clips[i],0,true);
   updateProgress(i,0);
   renderList();
@@ -535,7 +556,7 @@ function renderList(){
 async function addClip(blob,dur,thumb,kind){
   const c={id:Date.now()+'-'+Math.random().toString(36).slice(2,7),blob,url:URL.createObjectURL(blob),dur:dur||0,thumb:thumb||'',texts:[],kind:kind||'video'};
   clips.push(c);
-  await saveClip(c);await saveOrder();
+  await saveBlob(c);await saveOrder();
   return c;
 }
 function makeThumb(url){
@@ -671,7 +692,7 @@ function syncSheet(){
 }
 async function changed(needFonts){
   const c=clips[ei];if(!c)return;
-  if(needFonts)await ensureFonts(c.texts);
+  if(needFonts)await withTimeout(ensureFonts(c.texts),2000);
   syncChipsOnly();redraw();saveSoon(c);renderListKeep();
 }
 function syncChipsOnly(){
@@ -685,7 +706,7 @@ async function openSheet(i){
   if(!clips[i].texts.length)clips[i].texts.push(newLayer());
   await selectClip(i);
   $('#sheet').hidden=false;syncSheet();
-  await ensureFonts(clips[i].texts);redraw();saveClip(clips[i]);
+  await withTimeout(ensureFonts(clips[i].texts),2000);redraw();saveClip(clips[i]);
 }
 $('#shClose').onclick=()=>{$('#sheet').hidden=true;if(playing)stopPlay();selectClip(ei);saveClip(clips[ei]);renderList()};
 const bind=(id,key,conv=v=>v)=>$(id).addEventListener('input',e=>{const l=layer();if(!l)return;l[key]=conv(e.target.type==='checkbox'?e.target.checked:e.target.value);changed(key==='size'||key==='text')});
@@ -716,28 +737,20 @@ const endDrag=()=>{if(!drag)return;drag=null;const c=clips[ei];if(c)saveSoon(c)}
 cv.addEventListener('pointerup',endDrag);cv.addEventListener('pointercancel',endDrag);
 $('#fDel').onclick=()=>{const c=clips[ei];if(!c||!c.texts.length)return;c.texts.splice(li,1);li=Math.max(0,li-1);syncSheet();redraw();saveClip(c);renderListKeep()};
 /* 모든 클립에 한꺼번에 적용 */
-$('#fAllAdd').onclick=()=>{
+/* 글자와 스타일을 함께, 다른 모든 클립의 같은 번호(T1이면 T1) 텍스트로 적용. 그 번호의 텍스트가 없는 클립에는 새로 추가 */
+$('#fAll').onclick=()=>{
   const l=layer();if(!l||!l.text)return;
-  let n=0;
-  clips.forEach((c,i)=>{
-    if(i===ei||c.texts.some(t=>t.text===l.text&&t.font===l.font))return;
-    c.texts.push({...l});saveClip(c);n++;
-  });
+  const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+  const others=clips.filter(c=>c!==clips[ei]);
+  const replace=others.filter(c=>c.texts[li]&&!same(c.texts[li],l)); // 기존 텍스트를 덮어쓸 클립
+  const add=others.filter(c=>!c.texts[li]);                          // 새로 추가할 클립
+  if(!replace.length&&!add.length){toast('이미 모든 클립에 똑같이 들어 있어요');return}
+  const withText=replace.filter(c=>c.texts[li].text!==l.text).length;
+  if(withText&&!confirm(`다른 클립 ${withText}개에 이미 있는 T${li+1} 텍스트의 글자가 이 텍스트로 바뀌어요. 계속할까요?`))return;
+  replace.forEach(c=>{c.texts[li]={...l};saveClip(c)});
+  add.forEach(c=>{c.texts.push({...l});saveClip(c)});
   renderListKeep();
-  toast(n?`다른 클립 ${n}개에 추가했어요`:'이미 모든 클립에 들어 있어요');
-};
-$('#fAllStyle').onclick=()=>{
-  const l=layer();if(!l)return;
-  const targets=clips.filter(c=>c!==clips[ei]&&c.texts[li]);
-  if(!targets.length){toast(`다른 클립에 T${li+1} 텍스트가 없어요`);return}
-  if(!confirm(`다른 클립 ${targets.length}개의 T${li+1} 텍스트 모양(글꼴·크기·색·효과·위치)을 이 텍스트와 똑같이 바꿀까요? 글자 내용은 그대로예요.`))return;
-  targets.forEach(c=>{
-    const t=c.texts[li];
-    Object.assign(t,{font:l.font,size:l.size,color:l.color,stroke:l.stroke,sw:l.sw,box:l.box,effect:l.effect,x:l.x,y:l.y,delay:l.delay});
-    saveClip(c);
-  });
-  renderListKeep();
-  toast(`${targets.length}개 클립에 스타일을 적용했어요`);
+  toast(`다른 클립 ${replace.length+add.length}개에 적용했어요`);
 };
 $('#fPlay').onclick=()=>togglePlayOnce();
 async function togglePlayOnce(){
