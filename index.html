@@ -42,6 +42,7 @@ header h1 span{display:inline-block;animation:bob 2.4s ease-in-out infinite}
 #trBar{flex:none;display:flex;align-items:center;gap:8px;padding:2px 16px 0;color:var(--sub);font-size:14px}
 #trBar span{white-space:nowrap}
 #trBar .chips{flex:1;padding:4px 0}
+#trBar select{flex:none;font-size:14px;padding:5px 8px}
 #trBar .chips button{font-size:14px;padding:5px 12px}
 #list{flex:1;overflow:auto;padding:10px 16px;display:flex;flex-direction:column;gap:8px}
 .empty{color:var(--sub);text-align:center;margin-top:24px;line-height:1.8;font-size:16px}
@@ -102,7 +103,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
     <canvas id="cv" width="720" height="1280"></canvas>
     <div id="playbar"><button id="btnPlay">▶</button><div id="prog"><i></i></div><span id="time">0:00 / 0:00</span></div>
   </div>
-  <div id="trBar"><span>✨ 전환</span><div class="chips" id="trChips"></div></div>
+  <div id="trBar"><span>✨ 전환</span><div class="chips" id="trChips"></div><select id="trSpeed" title="전환 속도"><option value="0.2">빠르게</option><option value="0.4">보통</option><option value="0.7">느리게</option></select></div>
   <div id="list"></div>
   <div id="actions">
     <button class="rec" id="btnRec">● 촬영</button>
@@ -392,7 +393,8 @@ function drawFrame(clip,t,settled){
    (영상 요소는 하나만 재생하므로 모든 기기에서 안정적이고, 전체 길이와 텍스트 시간이 변하지 않음)
    텍스트는 영상 위에 그대로 유지되고 영상 부분에만 효과가 적용됨 */
 const TRANS=[['none','없음'],['fade','페이드'],['white','화이트'],['slide','슬라이드'],['zoom','줌'],['iris','방울'],['curtain','커튼']];
-const TR_LEN=0.4; // 다음 클립이 앞 클립 위로 나타나는 시간(초)
+let TR_LEN=0.2; // 다음 클립이 앞 클립 위로 나타나는 시간(초). 빠르게 0.2(기본) / 보통 0.4 / 느리게 0.7
+try{const v=parseFloat(localStorage.getItem('trlen'));if(v>0&&v<=1)TR_LEN=v}catch(e){}
 let trKind='fade';
 try{const v=localStorage.getItem('tr');if(v&&TRANS.some(x=>x[0]===v))trKind=v}catch(e){}
 const snap=document.createElement('canvas'),snapCtx=snap.getContext('2d'); // 앞 클립의 마지막 장면
@@ -619,6 +621,9 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
               if(remain<=0)tryPre();
               else if(!preTimer&&isFinite(remain)){preTimer=setTimeout(()=>{preTimer=null;if(!tryPre())preTimer=null},Math.max(0,remain*1000-5))}
             }
+            // 다음 영상이 이미 움직이고 있고 이 클립이 거의 끝났으면 'ended' 신호를 기다리지 않고 바로 다음 클립으로
+            // (끝 신호는 마지막 프레임보다 늦게 오는 기기가 많아서, 기다리면 넘어가는 순간이 굼떠 보임)
+            if(pre&&spare.currentTime>0.02&&end-t<=0.04){finish();return}
             const now=performance.now();
             if(t!==lastT){lastT=t;lastAdv=now}
             else if(vid!==vids[0]&&!useSingle&&now-lastAdv>1200){
@@ -960,6 +965,21 @@ async function togglePlayOnce(){
   if(r==='done')await selectClip(ei);
 }
 $('#btnPlay').onclick=()=>togglePlay();
+
+/* 전환 속도 */
+(()=>{
+  const sel=$('#trSpeed');
+  sel.value=String(TR_LEN);
+  if(sel.value!==String(TR_LEN)){ // 저장된 값이 목록에 없으면 가장 가까운 항목
+    const opts=[...sel.options].map(o=>+o.value);
+    sel.value=String(opts.reduce((a,b)=>Math.abs(b-TR_LEN)<Math.abs(a-TR_LEN)?b:a));
+  }
+  sel.onchange=()=>{
+    TR_LEN=parseFloat(sel.value)||0.4;
+    try{localStorage.setItem('trlen',String(TR_LEN))}catch(e){}
+    if(trKind!=='none')previewTransition();
+  };
+})();
 
 /* ---------- 내보내기 ---------- */
 function expUI(msg,showBar,btns){
