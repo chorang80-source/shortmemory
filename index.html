@@ -294,12 +294,15 @@ function drawFrame(clip,t,settled){
 const redraw=()=>{if(cur>=0&&clips[cur])drawFrame(clips[cur],0,true)};
 
 /* ---------- 재생 ---------- */
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const withTimeout=(p,ms)=>Promise.race([p,sleep(ms)]);
 function loadClip(i){
   return new Promise(res=>{
     const c=clips[i];cur=i;let done=false;
-    const fin=()=>{if(done)return;done=true;vid.removeEventListener('loadeddata',fin);res()};
-    vid.addEventListener('loadeddata',fin);
-    vid.src=c.url;vid.load();setTimeout(fin,4000);
+    const evs=['loadeddata','canplay','error'];
+    const fin=()=>{if(done)return;done=true;evs.forEach(e=>vid.removeEventListener(e,fin));res()};
+    evs.forEach(e=>vid.addEventListener(e,fin));
+    vid.preload='auto';vid.src=c.url;vid.load();setTimeout(fin,3000);
   });
 }
 const fmt=s=>{s=Math.max(0,Math.round(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
@@ -311,27 +314,60 @@ function updateProgress(i,t){
   $('#expBar i').style.width=frac*100+'%';
   $('#time').textContent=fmt(before+t)+' / '+fmt(tot);
 }
+/* 반환: 'done'(끝까지 재생) | 'cancel'(중지·취소됨) | 'fail'(재생 시작 실패) */
 async function playRange(from,only){
   const token=++runToken;
   const last=only?from:clips.length-1;
   for(let i=from;i<=last;i++){
-    if(token!==runToken)return false;
+    if(token!==runToken)return 'cancel';
+    vid.muted=false;
     await loadClip(i);
-    await ensureFonts(clips[i].texts);
-    if(token!==runToken)return false;
-    try{vid.currentTime=0;await vid.play()}catch(e){toast('재생 실패');return false}
+    await withTimeout(ensureFonts(clips[i].texts),1500); // 글꼴이 늦어도 멈추지 않게
+    if(token!==runToken)return 'cancel';
+    if(actx&&actx.state!=='running'){try{await withTimeout(actx.resume(),800)}catch(e){}}
+    try{vid.currentTime=0}catch(e){}
+    let started=true;
+    try{await withTimeout(vid.play(),3000)}
+    catch(e){
+      // 자동재생 차단 등: 미리보기에서만 음소거로 한 번 더 시도
+      started=false;
+      if(!exporting){vid.muted=true;try{await withTimeout(vid.play(),2000);started=true}catch(e2){}}
+    }
+    if(!started){toast(`클립 ${i+1} 재생을 시작하지 못했어요`);return 'fail'}
     await new Promise(res=>{
-      const step=()=>{
-        if(token!==runToken){res();return}
-        drawFrame(clips[i],vid.currentTime);
-        updateProgress(i,vid.currentTime);
-        if(vid.ended){res();return}
-        requestAnimationFrame(step);
+      let finished=false,lastT=-1,lastAdv=performance.now(),stalls=0,gen=0;
+      const finish=()=>{if(finished)return;finished=true;vid.removeEventListener('ended',finish);res()};
+      vid.addEventListener('ended',finish);
+      // rAF와 타이머를 함께 걸어 두고 먼저 오는 쪽만 실행 (화면이 가려져 rAF가 멈춰도 다음 클립으로 넘어가도록)
+      const step=g=>{
+        if(finished||g!==gen)return;
+        gen++;
+        if(token!==runToken){finish();return}
+        try{
+          const t=vid.currentTime;
+          drawFrame(clips[i],t);
+          updateProgress(i,t);
+          if(vid.ended){finish();return}
+          const d=clips[i].dur;
+          if(d>0&&t>=d+1){finish();return} // ended 신호가 오지 않을 때의 안전장치
+          const end=isFinite(vid.duration)?vid.duration:(d||Infinity);
+          if(vid.paused&&t>0&&t>=end-0.35){finish();return} // 끝에서 멈췄는데 ended가 안 온 경우
+          const now=performance.now();
+          if(t!==lastT){lastT=t;lastAdv=now}
+          else if(now-lastAdv>3000){ // 3초 동안 시간이 안 흐르면 재시도 → 그래도 멈추면 다음 클립으로
+            stalls++;lastAdv=now;
+            if(stalls>=2){toast(`클립 ${i+1}이 멈춰서 다음으로 넘어가요`);finish();return}
+            try{vid.play()}catch(e){}
+          }
+        }catch(e){console.error(e)} // 그리기 오류가 나도 반복이 죽지 않게
+        const go=gen;
+        requestAnimationFrame(()=>step(go));
+        setTimeout(()=>step(go),200);
       };
-      step();
+      step(gen);
     });
   }
-  return token===runToken;
+  return token===runToken?'done':'cancel';
 }
 function stopPlay(){runToken++;vid.pause();playing=false;setPlayUI()}
 function setPlayUI(){$('#btnPlay').textContent=playing?'⏸':'▶'}
@@ -341,8 +377,10 @@ async function togglePlay(only){
   if(!clips.length)return;
   if(prevGain)prevGain.gain.value=1;
   playing=true;setPlayUI();
-  const ok=await playRange(Math.max(0,cur),only===true);
-  if(ok){playing=false;setPlayUI();await selectClip(only===true?cur:0)}
+  const r=await playRange(Math.max(0,cur),only===true);
+  if(r==='cancel')return; // 중지·재시작된 경우 새 재생이 상태를 관리
+  playing=false;setPlayUI();
+  if(r==='done')await selectClip(only===true?cur:0);
 }
 async function selectClip(i){
   if(playing)stopPlay();
@@ -555,7 +593,15 @@ $('#fAllStyle').onclick=()=>{
   toast(`${targets.length}개 클립에 스타일을 적용했어요`);
 };
 $('#fPlay').onclick=()=>togglePlayOnce();
-async function togglePlayOnce(){ if(playing){stopPlay()}; initAudio(); if(prevGain)prevGain.gain.value=1; playing=true;setPlayUI(); const ok=await playRange(ei,true); if(ok){playing=false;setPlayUI();await selectClip(ei)} }
+async function togglePlayOnce(){
+  if(playing){stopPlay()}
+  initAudio();if(prevGain)prevGain.gain.value=1;
+  playing=true;setPlayUI();
+  const r=await playRange(ei,true);
+  if(r==='cancel')return;
+  playing=false;setPlayUI();
+  if(r==='done')await selectClip(ei);
+}
 $('#btnPlay').onclick=()=>togglePlay();
 
 /* ---------- 내보내기 ---------- */
@@ -583,7 +629,7 @@ $('#btnExport').onclick=async()=>{
   try{mr=new MediaRecorder(stream,mime?{mimeType:mime,videoBitsPerSecond:bps}:{videoBitsPerSecond:bps})}catch(e){mr=new MediaRecorder(stream)}
   mr.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
   mr.start(250);
-  const ok=await playRange(0);
+  const ok=(await playRange(0))==='done';
   await new Promise(r=>{mr.onstop=r;mr.stop()});
   if(prevGain)prevGain.gain.value=1;
   if(wake)try{wake.release()}catch(e){}
