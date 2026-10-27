@@ -101,7 +101,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
   <div id="list"></div>
   <div id="actions">
     <button class="rec" id="btnRec">● 촬영</button>
-    <label>📁 가져오기<input type="file" id="fImport" accept="video/*" multiple hidden></label>
+    <label>📁 영상·사진<input type="file" id="fImport" accept="video/*,image/*" multiple hidden></label>
     <label>📷 기본 카메라<input type="file" id="fNative" accept="video/*" capture="environment" hidden></label>
   </div>
 </div>
@@ -119,6 +119,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 
 <div id="sheet" hidden>
   <div class="sh-head"><b id="shTitle"></b><button class="pri" id="shClose">완료</button></div>
+  <div class="row" id="imgRow" hidden><label style="display:block;width:100%">🖼 사진 보여주는 시간 <b id="imgDurVal"></b><input type="range" id="fImgDur" min="1" max="10" step="0.5"></label></div>
   <div class="row" id="tabs"></div>
   <div class="lbl">💡 위쪽 영상 화면에서 글자를 손가락으로 끌어 옮길 수 있어요</div>
   <textarea id="fText" rows="2" placeholder="자막 내용 (줄바꿈 가능)"></textarea>
@@ -155,6 +156,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 const $=s=>document.querySelector(s);
 const W=720,H=1280;
 const cv=$('#cv'),ctx=cv.getContext('2d'),vid=$('#vid');
+const img=new Image(); // 사진 클립용
 let S=1; // 해상도 배율 (논리 좌표는 항상 720x1280)
 function setRes(s){S=s;cv.width=Math.round(W*s);cv.height=Math.round(H*s)}
 try{const q=localStorage.getItem('q');if(q)$('#qSel').value=q}catch(e){}
@@ -213,7 +215,7 @@ async function dbTx(store,fn){
     return await new Promise((res,rej)=>{const tx=db.transaction(store,'readwrite');const out=fn(tx);tx.oncomplete=()=>res(out&&out.result);tx.onerror=()=>rej(tx.error)});
   }catch(e){}
 }
-const saveClip=c=>dbTx('clips',tx=>tx.objectStore('clips').put({id:c.id,blob:c.blob,dur:c.dur,thumb:c.thumb,texts:c.texts}));
+const saveClip=c=>dbTx('clips',tx=>tx.objectStore('clips').put({id:c.id,blob:c.blob,dur:c.dur,thumb:c.thumb,texts:c.texts,kind:c.kind||'video'}));
 const saveOrder=()=>dbTx('meta',tx=>tx.objectStore('meta').put(clips.map(c=>c.id),'order'));
 const delClip=id=>dbTx('clips',tx=>tx.objectStore('clips').delete(id));
 let st;const saveSoon=c=>{clearTimeout(st);st=setTimeout(()=>saveClip(c),500)};
@@ -284,10 +286,13 @@ function drawLayer(l,t){
 function drawFrame(clip,t,settled){
   ctx.setTransform(S,0,0,S,0,0);
   ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
-  const vw=vid.videoWidth,vh=vid.videoHeight;
+  const isImg=!!clip&&clip.kind==='image',src=isImg?img:vid;
+  const vw=isImg?img.naturalWidth:vid.videoWidth,vh=isImg?img.naturalHeight:vid.videoHeight;
   if(vw&&vh){
-    const s=Math.max(W/vw,H/vh),dw=vw*s,dh=vh*s;
-    ctx.drawImage(vid,(W-dw)/2,(H-dh)/2,dw,dh);
+    let s=Math.max(W/vw,H/vh);
+    if(isImg&&!settled&&clip.dur>0)s*=1+0.08*Math.min(1,t/clip.dur); // 사진은 천천히 확대
+    const dw=vw*s,dh=vh*s;
+    ctx.drawImage(src,(W-dw)/2,(H-dh)/2,dw,dh);
   }
   if(clip)clip.texts.forEach(l=>drawLayer(l,settled?l.delay+10:t));
 }
@@ -297,6 +302,12 @@ const redraw=()=>{if(cur>=0&&clips[cur])drawFrame(clips[cur],0,true)};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const withTimeout=(p,ms)=>Promise.race([p,sleep(ms)]);
 function loadClip(i){
+  const c0=clips[i];
+  if(c0.kind==='image'){
+    cur=i;vid.pause();
+    if(img.src===c0.url&&img.complete&&img.naturalWidth)return Promise.resolve();
+    return new Promise(res=>{img.onload=img.onerror=()=>res();img.src=c0.url;setTimeout(res,3000)});
+  }
   return new Promise(res=>{
     const c=clips[i];cur=i;let done=false;
     const evs=['loadeddata','canplay','error'];
@@ -325,17 +336,21 @@ async function playRange(from,only){
     await withTimeout(ensureFonts(clips[i].texts),1500); // 글꼴이 늦어도 멈추지 않게
     if(token!==runToken)return 'cancel';
     if(actx&&actx.state!=='running'){try{await withTimeout(actx.resume(),800)}catch(e){}}
-    try{vid.currentTime=0}catch(e){}
-    let started=true;
-    try{await withTimeout(vid.play(),3000)}
-    catch(e){
-      // 자동재생 차단 등: 미리보기에서만 음소거로 한 번 더 시도
-      started=false;
-      if(!exporting){vid.muted=true;try{await withTimeout(vid.play(),2000);started=true}catch(e2){}}
+    const isImg=clips[i].kind==='image';
+    if(!isImg){
+      try{vid.currentTime=0}catch(e){}
+      let started=true;
+      try{await withTimeout(vid.play(),3000)}
+      catch(e){
+        // 자동재생 차단 등: 미리보기에서만 음소거로 한 번 더 시도
+        started=false;
+        if(!exporting){vid.muted=true;try{await withTimeout(vid.play(),2000);started=true}catch(e2){}}
+      }
+      if(!started){toast(`클립 ${i+1} 재생을 시작하지 못했어요`);return 'fail'}
     }
-    if(!started){toast(`클립 ${i+1} 재생을 시작하지 못했어요`);return 'fail'}
     await new Promise(res=>{
       let finished=false,lastT=-1,lastAdv=performance.now(),stalls=0,gen=0;
+      const tStart=performance.now(); // 사진 클립은 시계로 길이를 잼
       const finish=()=>{if(finished)return;finished=true;vid.removeEventListener('ended',finish);res()};
       vid.addEventListener('ended',finish);
       // rAF와 타이머를 함께 걸어 두고 먼저 오는 쪽만 실행 (화면이 가려져 rAF가 멈춰도 다음 클립으로 넘어가도록)
@@ -344,20 +359,24 @@ async function playRange(from,only){
         gen++;
         if(token!==runToken){finish();return}
         try{
-          const t=vid.currentTime;
+          const t=isImg?(performance.now()-tStart)/1000:vid.currentTime;
           drawFrame(clips[i],t);
           updateProgress(i,t);
-          if(vid.ended){finish();return}
-          const d=clips[i].dur;
-          if(d>0&&t>=d+1){finish();return} // ended 신호가 오지 않을 때의 안전장치
-          const end=isFinite(vid.duration)?vid.duration:(d||Infinity);
-          if(vid.paused&&t>0&&t>=end-0.35){finish();return} // 끝에서 멈췄는데 ended가 안 온 경우
-          const now=performance.now();
-          if(t!==lastT){lastT=t;lastAdv=now}
-          else if(now-lastAdv>3000){ // 3초 동안 시간이 안 흐르면 재시도 → 그래도 멈추면 다음 클립으로
-            stalls++;lastAdv=now;
-            if(stalls>=2){toast(`클립 ${i+1}이 멈춰서 다음으로 넘어가요`);finish();return}
-            try{vid.play()}catch(e){}
+          if(isImg){
+            if(t>=clips[i].dur){finish();return}
+          }else{
+            if(vid.ended){finish();return}
+            const d=clips[i].dur;
+            if(d>0&&t>=d+1){finish();return} // ended 신호가 오지 않을 때의 안전장치
+            const end=isFinite(vid.duration)?vid.duration:(d||Infinity);
+            if(vid.paused&&t>0&&t>=end-0.35){finish();return} // 끝에서 멈췄는데 ended가 안 온 경우
+            const now=performance.now();
+            if(t!==lastT){lastT=t;lastAdv=now}
+            else if(now-lastAdv>3000){ // 3초 동안 시간이 안 흐르면 재시도 → 그래도 멈추면 다음 클립으로
+              stalls++;lastAdv=now;
+              if(stalls>=2){toast(`클립 ${i+1}이 멈춰서 다음으로 넘어가요`);finish();return}
+              try{vid.play()}catch(e){}
+            }
           }
         }catch(e){console.error(e)} // 그리기 오류가 나도 반복이 죽지 않게
         const go=gen;
@@ -386,7 +405,7 @@ async function selectClip(i){
   if(playing)stopPlay();
   if(i<0||i>=clips.length){cur=-1;drawFrame(null,0);renderList();return}
   await loadClip(i);
-  await new Promise(r=>{vid.addEventListener('seeked',r,{once:true});try{vid.currentTime=0.05}catch(e){}setTimeout(r,500)});
+  if(clips[i].kind!=='image')await new Promise(r=>{vid.addEventListener('seeked',r,{once:true});try{vid.currentTime=0.05}catch(e){}setTimeout(r,500)});
   await ensureFonts(clips[i].texts);
   drawFrame(clips[i],0,true);
   updateProgress(i,0);
@@ -401,7 +420,7 @@ function renderList(){
   clips.forEach((c,i)=>{
     const d=document.createElement('div');d.className='card'+(i===cur?' sel':'');
     d.innerHTML=`${c.thumb?`<img src="${c.thumb}">`:'<div class="noimg"></div>'}
-      <div class="meta"><b>#${i+1} · ${c.dur?c.dur.toFixed(1)+'초':'?'}</b><span>${c.texts.length?c.texts.map(t=>t.text.replace(/\n/g,' ')).join(' / '):'텍스트 없음'}</span></div>
+      <div class="meta"><b>#${i+1} · ${c.dur?c.dur.toFixed(1)+'초':'?'}${c.kind==='image'?' · 🖼 사진':''}</b><span>${c.texts.length?c.texts.map(t=>t.text.replace(/\n/g,' ')).join(' / '):'텍스트 없음'}</span></div>
       <div class="btns"><button data-a="up">▲</button><button data-a="down">▼</button><button data-a="edit">✎</button><button data-a="del">🗑</button></div>`;
     d.onclick=e=>{
       const a=e.target.dataset.a;
@@ -415,8 +434,8 @@ function renderList(){
   });
   const tot=totalDur();$('#time').textContent=(playing||exporting?$('#time').textContent:'0:00 / '+fmt(tot));
 }
-async function addClip(blob,dur,thumb){
-  const c={id:Date.now()+'-'+Math.random().toString(36).slice(2,7),blob,url:URL.createObjectURL(blob),dur:dur||0,thumb:thumb||'',texts:[]};
+async function addClip(blob,dur,thumb,kind){
+  const c={id:Date.now()+'-'+Math.random().toString(36).slice(2,7),blob,url:URL.createObjectURL(blob),dur:dur||0,thumb:thumb||'',texts:[],kind:kind||'video'};
   clips.push(c);
   await saveClip(c);await saveOrder();
   return c;
@@ -436,12 +455,34 @@ function makeThumb(url){
     v.src=url;
   });
 }
+function makeImageThumb(url){
+  return new Promise(res=>{
+    const im=new Image();
+    im.onload=()=>{
+      const c=document.createElement('canvas');c.width=90;c.height=160;
+      const s=Math.max(90/im.naturalWidth,160/im.naturalHeight);
+      c.getContext('2d').drawImage(im,(90-im.naturalWidth*s)/2,(160-im.naturalHeight*s)/2,im.naturalWidth*s,im.naturalHeight*s);
+      res(c.toDataURL('image/jpeg',.7));
+    };
+    im.onerror=()=>res(null);
+    im.src=url;
+  });
+}
+const PHOTO_SEC=3; // 사진 기본 길이(초)
 async function importFiles(files){
+  let added=0;
   for(const f of files){
-    const url=URL.createObjectURL(f),m=await makeThumb(url);URL.revokeObjectURL(url);
-    await addClip(f,m.dur,m.thumb);
+    const url=URL.createObjectURL(f);
+    if(f.type.startsWith('image/')){
+      const th=await makeImageThumb(url);URL.revokeObjectURL(url);
+      if(th===null){toast('사진을 열 수 없어요: '+f.name);continue}
+      await addClip(f,PHOTO_SEC,th,'image');added++;continue;
+    }
+    const m=await makeThumb(url);URL.revokeObjectURL(url);
+    await addClip(f,m.dur,m.thumb);added++;
   }
-  toast(files.length+'개 추가됨');
+  if(!added)return;
+  toast(added+'개 추가됨');
   await selectClip(clips.length-1);
 }
 $('#fImport').onchange=e=>{importFiles([...e.target.files]);e.target.value=''};
@@ -516,6 +557,9 @@ function buildChips(){
 function syncSheet(){
   const c=clips[ei];if(!c)return;
   $('#shTitle').textContent=`클립 #${ei+1} 텍스트`;
+  const isImg=c.kind==='image';
+  $('#imgRow').hidden=!isImg;
+  if(isImg){$('#fImgDur').value=c.dur;$('#imgDurVal').textContent=c.dur+'초'}
   const tabs=$('#tabs');tabs.innerHTML='';
   c.texts.forEach((_,k)=>{const b=document.createElement('button');b.textContent='T'+(k+1);if(k===li)b.className='pri';b.onclick=()=>{li=k;syncSheet()};tabs.appendChild(b)});
   const add=document.createElement('button');add.textContent='＋ 텍스트 추가';add.onclick=()=>{const n=newLayer();if(c.texts.length)n.y=Math.max(10,c.texts[c.texts.length-1].y-15);c.texts.push(n);li=c.texts.length-1;syncSheet();changed(true)};tabs.appendChild(add);
@@ -549,6 +593,11 @@ $('#shClose').onclick=()=>{$('#sheet').hidden=true;if(playing)stopPlay();selectC
 const bind=(id,key,conv=v=>v)=>$(id).addEventListener('input',e=>{const l=layer();if(!l)return;l[key]=conv(e.target.type==='checkbox'?e.target.checked:e.target.value);changed(key==='size'||key==='text')});
 bind('#fText','text');bind('#fSize','size',Number);bind('#fY','y',Number);bind('#fDelay','delay',Number);bind('#fSw','sw',Number);
 bind('#fColor','color');bind('#fStroke','stroke');bind('#fBox','box');
+$('#fImgDur').addEventListener('input',e=>{
+  const c=clips[ei];if(!c)return;
+  c.dur=parseFloat(e.target.value);$('#imgDurVal').textContent=c.dur+'초';
+  saveSoon(c);renderListKeep();
+});
 /* 캔버스에서 드래그로 텍스트 이동 (가장 가까운 텍스트를 잡음) */
 let drag=null;
 const cpos=e=>{const r=cv.getBoundingClientRect();return[(e.clientX-r.left)/r.width*100,(e.clientY-r.top)/r.height*100]};
