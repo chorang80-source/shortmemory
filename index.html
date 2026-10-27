@@ -23,6 +23,13 @@ button.pri{background:linear-gradient(135deg,#ff9cc9,#ff6fa8);border-color:#ff6f
 button.pri:active{box-shadow:none}
 button:disabled{opacity:.4}
 #app{position:relative;z-index:1;height:100dvh;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
+#diag{position:fixed;inset:0;z-index:60;background:rgba(40,60,110,.9);display:flex;align-items:center;justify-content:center;padding:16px}
+#diag .box{background:#fff;color:var(--txt);border-radius:22px;padding:16px;max-width:520px;width:100%;max-height:82dvh;overflow:auto}
+#diag pre{white-space:pre-wrap;word-break:break-all;font-size:12px;line-height:1.5;margin:8px 0}
+/* 재생·내보내기 중: 배경 애니메이션과 흐림 효과를 꺼서 영상 재생·그리기가 끊기지 않게 함 */
+body.busy #bubbles{display:none}
+body.busy *{animation:none!important}
+body.busy #actions,body.busy #exp{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
 #bubbles{position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0}
 #bubbles i{position:absolute;bottom:-120px;border-radius:50%;background:radial-gradient(circle at 30% 28%,#fff 0 12%,rgba(255,255,255,.35) 13% 40%,rgba(130,200,255,.18) 70%);border:1.5px solid rgba(255,255,255,.8);animation:rise linear infinite}
 @keyframes rise{0%{transform:translate(0,0) scale(.8);opacity:0}10%{opacity:1}50%{transform:translate(18px,-55dvh) scale(1)}100%{transform:translate(-14px,-115dvh) scale(1.1);opacity:0}}
@@ -155,6 +162,8 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
   <div class="row" id="expBtns" style="justify-content:center"></div>
 </div>
 
+<div id="diag" hidden><div class="box"><b>재생 진단</b><pre id="diagTxt"></pre><div class="row"><button id="diagCopy">복사</button><button id="diagClose" class="pri">닫기</button></div></div></div>
+
 <div id="toast"></div>
 <video id="vid" playsinline muted></video>
 <video id="vid2" playsinline muted></video>
@@ -163,7 +172,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 'use strict';
 const $=s=>document.querySelector(s);
 const W=720,H=1280;
-const cv=$('#cv'),ctx=cv.getContext('2d');
+const cv=$('#cv'),ctx=cv.getContext('2d',{alpha:false}); // 투명도가 필요 없으므로 끄면 그리기가 빨라짐
 // 영상 요소 2개를 번갈아 사용: 재생 중인 vid, 다음 클립을 미리 불러두는 spare
 const vids=[$('#vid'),$('#vid2')];
 let vid=vids[0],spare=vids[1],spareIdx=-1;
@@ -180,8 +189,10 @@ function enterSingle(why,persist=true){
   console.warn('단일 영상 모드:',why);
 }
 const img=new Image(); // 사진 클립용
-let S=1; // 해상도 배율 (논리 좌표는 항상 720x1280)
+const PREVIEW_S=0.75; // 미리보기는 화면에 보이는 크기에 맞춰 540x960으로 그림 (내보내기는 고른 화질 720p/1080p 그대로)
+let S=PREVIEW_S; // 해상도 배율 (논리 좌표는 항상 720x1280)
 function setRes(s){S=s;cv.width=Math.round(W*s);cv.height=Math.round(H*s)}
+setRes(PREVIEW_S);
 try{const q=localStorage.getItem('q');if(q)$('#qSel').value=q}catch(e){}
 $('#qSel').onchange=e=>{try{localStorage.setItem('q',e.target.value)}catch(_){}};
 
@@ -227,13 +238,23 @@ const abuf=new Map();      // clip.id -> AudioBuffer(해독 성공) | 'pending' 
 const liveAudio=new Map(); // 클립 번호 -> 재생 중인 오디오
 const MAX_DECODE=40e6;     // 이보다 큰 파일은 해독하지 않고 영상 요소의 소리를 사용 (메모리 보호)
 const hasBuf=clip=>abuf.get(clip.id) instanceof AudioBuffer;
+/* 소리 해독 전용 오프라인 오디오: 사용자가 버튼을 누르기 전에도 쓸 수 있어서, 클립을 추가하거나 앱을 열 때 미리 해독해 둘 수 있음
+   (재생 버튼을 누른 뒤에 해독하면 시작이 늦어짐. 해독한 결과는 재생용 오디오에서 그대로 사용 가능) */
+let decoder=null;
+function getDecoder(){
+  if(decoder)return decoder;
+  const OC=window.OfflineAudioContext||window.webkitOfflineAudioContext;
+  try{decoder=OC?new OC(2,1,44100):null}catch(e){decoder=null}
+  return decoder;
+}
 function prepAudio(list){
   return Promise.all(list.filter(c=>c.kind!=='image'&&!abuf.has(c.id)).map(async c=>{
-    if(!actx||c.blob.size>MAX_DECODE){abuf.set(c.id,null);return}
+    const dc=getDecoder()||actx;
+    if(!dc||c.blob.size>MAX_DECODE){abuf.set(c.id,null);return}
     abuf.set(c.id,'pending');
     try{
       const ab=await c.blob.arrayBuffer();
-      const buf=await new Promise((res,rej)=>{const p=actx.decodeAudioData(ab,res,rej);if(p&&p.catch)p.catch(()=>{})});
+      const buf=await new Promise((res,rej)=>{const p=dc.decodeAudioData(ab,res,rej);if(p&&p.catch)p.catch(()=>{})});
       abuf.set(c.id,buf instanceof AudioBuffer?buf:null);
     }catch(e){abuf.set(c.id,null)} // 소리가 없거나 해독할 수 없는 파일
   }));
@@ -331,6 +352,23 @@ function wrap(text,maxW){
   }
   return out;
 }
+/* 글자 줄바꿈·폭 계산 결과를 저장해 두고 재사용 (매 프레임 글자마다 폭을 재면 사파리에서 특히 느림).
+   글꼴이 뒤늦게 로드되면 폭이 달라지므로 그때는 다시 계산 */
+const textCache=new WeakMap();
+let fontEpoch=0;
+try{document.fonts.addEventListener('loadingdone',()=>{fontEpoch++})}catch(e){}
+function textLayout(l){
+  const fs=fontStr(l),key=fs+'|'+l.text+'|'+fontEpoch;
+  let c=textCache.get(l);
+  if(!c||c.key!==key){
+    ctx.save();ctx.font=fs;
+    const lines=wrap(l.text,W*0.88);
+    c={key,fs,lines,chars:lines.map(x=>[...x]),total:lines.reduce((s,x)=>s+[...x].length,0),mw:Math.max(1,...lines.map(x=>ctx.measureText(x).width))};
+    ctx.restore();
+    textCache.set(l,c);
+  }
+  return c;
+}
 function drawLayer(l,t){
   if(!l.text)return;
   if(t<l.delay)return;
@@ -343,26 +381,23 @@ function drawLayer(l,t){
     case 'bounce':dy=-Math.abs(Math.sin(tt*5))*26*Math.min(1,tt*2);break;
     case 'pulse':sc=1+0.07*Math.sin(tt*7);break;
   }
+  const c=textLayout(l),lines=c.lines;
   ctx.save();
-  ctx.font=fontStr(l);
-  const lines=wrap(l.text,W*0.88);
-  if(l.effect==='type'){
-    const total=lines.reduce((s,x)=>s+[...x].length,0);
-    vis=Math.floor(Math.min(1,tt/Math.min(2.5,Math.max(0.5,total*0.09)))*total);
-  }
+  ctx.font=c.fs;
+  if(l.effect==='type')vis=Math.floor(Math.min(1,tt/Math.min(2.5,Math.max(0.5,c.total*0.09)))*c.total);
   ctx.globalAlpha=a;
   ctx.translate(W*(l.x??50)/100,H*l.y/100+dy);ctx.scale(sc,sc);
   ctx.textAlign='center';ctx.textBaseline='middle';ctx.lineJoin='round';
   const lh=l.size*1.25,top=-(lines.length-1)*lh/2;
   if(l.box){
-    const mw=Math.max(...lines.map(x=>ctx.measureText(x).width));
+    const mw=c.mw;
     ctx.fillStyle='rgba(0,0,0,.55)';ctx.beginPath();
     if(ctx.roundRect)ctx.roundRect(-mw/2-28,top-lh/2-10,mw+56,lines.length*lh+20,22);else ctx.rect(-mw/2-28,top-lh/2-10,mw+56,lines.length*lh+20);
     ctx.fill();
   }
   let left=vis;
   lines.forEach((s,i)=>{
-    if(l.effect==='type'){const n=[...s].length;s=[...s].slice(0,Math.max(0,Math.min(n,left))).join('');left-=n}
+    if(l.effect==='type'){const ch=c.chars[i],n=ch.length;s=ch.slice(0,Math.max(0,Math.min(n,left))).join('');left-=n}
     if(!s)return;
     if(l.sw>0){ctx.strokeStyle=l.stroke;ctx.lineWidth=l.sw*2;ctx.strokeText(s,0,top+i*lh)}
     ctx.fillStyle=l.color;ctx.fillText(s,0,top+i*lh);
@@ -455,14 +490,14 @@ function drawWithTransition(src,vw,vh,s,tr,under){
 /* 겹쳐 재생: 앞 클립(i)이 끝나기 전에 다음 클립(i+1)도 재생을 시작해서 두 영상이 함께 움직이며 섞임.
    섞이는 정도(p)는 다음 클립이 재생된 시간(tIn)으로 정하므로 두 영상의 시작 시각이 조금 어긋나도 어긋나지 않음. */
 const overlapLen=()=>trKind==='none'?0:TR_LEN; // 겹치는 시간(초). 전환 효과가 '없음'이면 겹치지 않고 바로 이어짐
-function drawOverlapFrame(i,t,tIn){
+function drawOverlapFrame(i,t,tIn,mov){ // mov: 다음 영상이 출발한 뒤 실제로 움직인 시간 (섞이는 정도를 정함)
   const A=clips[i],B=clips[i+1],va=vid,vb=spare;
   if(!va.videoWidth||!vb.videoWidth)return false; // 아직 그릴 수 없으면 일반 그리기로
   ctx.setTransform(S,0,0,S,0,0);
   ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
   const sa=Math.max(W/va.videoWidth,H/va.videoHeight),sb=Math.max(W/vb.videoWidth,H/vb.videoHeight);
   const under=()=>{const dw=va.videoWidth*sa,dh=va.videoHeight*sa;ctx.drawImage(va,(W-dw)/2,(H-dh)/2,dw,dh)};
-  drawWithTransition(vb,vb.videoWidth,vb.videoHeight,sb,{p:Math.min(1,Math.max(0,tIn/overlapLen()))},under);
+  drawWithTransition(vb,vb.videoWidth,vb.videoHeight,sb,{p:Math.min(1,Math.max(0,(mov===undefined?tIn:mov)/overlapLen()))},under);
   // 텍스트: 앞 클립에서 이어지는 것은 그대로, 다음 클립에서 새로 시작하는 것은 다음 클립 시간으로
   for(const [l,j] of layersFor(i))drawLayer(l,j===i?t:tlAt(i)-tlAt(j)+t);
   for(const l of B.texts)drawLayer(l,tIn);
@@ -523,34 +558,39 @@ function preloadNext(i){
   if(c.kind==='image'){const p=new Image();p.src=c.url;if(p.decode)p.decode().catch(()=>{});return}
   if(useSingle||spareIdx===i)return;
   spareIdx=i;spare.pause();spare.muted=true;spare.preload='auto';spare.src=c.url;spare.load();
+  /* 아래 elMuted는 선언이 뒤에 있어도 호출 시점에는 이미 정의됨 */
   // 아이폰은 재생하기 전에는 영상을 미리 불러오지 않으므로, 음소거로 잠깐 재생했다가 멈춰 두어 첫 화면까지 준비시킴
   // (미리 출발이 이미 시작됐으면 멈추지 않음)
   try{
     const w=spare.play();
     if(w&&w.then)w.then(()=>{
-      if(spareIdx===i&&prerolledIdx!==i){spare.pause();try{spare.currentTime=0}catch(e){}spare.muted=hasBuf(c)}
+      // 0초로 되감지 않고 그 자리에서 멈춰 둠: 아이폰은 되감기(탐색)가 느리고, 되감으면 준비해 둔 상태가 사라져 재생 시작이 다시 늦어짐
+      if(spareIdx===i&&prerolledIdx!==i){spare.pause();spare.muted=elMuted(c)}
     }).catch(()=>{});
   }catch(e){}
 }
 /* 다음 클립 미리 출발: 영상은 play() 호출 뒤 실제로 움직이기까지 지연이 있어서(휴대폰에서 특히 큼),
    그 지연만큼 먼저 spare를 재생해 두었다가 교대하면 클립 시작 때 멈추지 않음. 지연은 실측해서 자동 보정 */
 let prerolledIdx=-1;
-const lagSamples=[];
+let preP0=0,preStartT=0,preMeasured=true; // 미리 출발시킨 시각, 그때 다음 영상의 위치, 지연 측정을 마쳤는지
+const lagSamples=[]; // 재생을 시작한 뒤 영상이 실제로 움직이기까지 걸린 시간(ms)
+/* 앞 클립이 끝나기 얼마 전에 다음 영상을 출발시킬지. 영상이 "움직이기 시작할 때"까지 걸린 시간을 재서, 최근 3번 중 가장 느린 값을 기준으로
+   여유를 둠 (평균을 쓰면 가끔 느린 경우에 앞 클립이 끝났는데 다음 영상이 아직 안 움직여서 멈춰 보임) */
 function leadSec(){
-  if(!lagSamples.length)return 0.25;
-  const avg=lagSamples.reduce((a,b)=>a+b,0)/lagSamples.length;
-  return Math.min(700,Math.max(50,avg+40))/1000;
+  if(!lagSamples.length)return 0.3;
+  const m=Math.max(...lagSamples.slice(-3));
+  return Math.min(1200,Math.max(50,m+30))/1000;
 }
+/* 아이폰은 사용자가 직접 시작하지 않은 영상의 소리 재생을 막아서 시도하면 거부된 뒤 다시 시도하느라 멈춤 → 영상은 항상 음소거,
+   소리는 해독한 오디오로만 재생 (해독하지 못한 클립은 무음). 다른 기기는 해독하지 못한 클립만 영상 요소의 소리를 사용 */
+const isIOS=/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+const elMuted=clip=>isIOS||hasBuf(clip);
+const diag={transitions:[]}; // 진단: 가장 최근 재생에서 클립 사이마다 두 영상이 멈춰 있던 시간 등
 function startPreroll(idx){
-  const v=spare,p0=performance.now();
-  prerolledIdx=idx;v.muted=hasBuf(clips[idx]);
-  const onPlaying=()=>{
-    v.removeEventListener('playing',onPlaying);
-    lagSamples.push(performance.now()-p0);
-    if(lagSamples.length>4)lagSamples.shift();
-  };
-  v.addEventListener('playing',onPlaying);
-  const undo=()=>{prerolledIdx=-1;stopClipAudio(idx);v.removeEventListener('playing',onPlaying)};
+  const v=spare;
+  preP0=performance.now();preStartT=v.currentTime;preMeasured=false;
+  prerolledIdx=idx;v.muted=elMuted(clips[idx]);
+  const undo=()=>{prerolledIdx=-1;stopClipAudio(idx)};
   const O=overlapLen();
   const startSound=()=>{
     if(prerolledIdx!==idx)return;
@@ -566,7 +606,11 @@ function startPreroll(idx){
 }
 const fmt=s=>{s=Math.max(0,Math.round(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
 const totalDur=()=>clips.reduce((s,c)=>s+(c.dur||0),0);
-function updateProgress(i,t){
+let lastProgAt=0;
+function updateProgress(i,t,force){
+  const now=performance.now();
+  if(!force&&now-lastProgAt<90)return; // 화면 글자·막대는 초당 10번 정도만 갱신 (매 프레임 갱신하면 화면 배치를 계속 다시 계산해서 느려짐)
+  lastProgAt=now;
   const done=tlAt(i)+t,tot=timelineTotal(); // 겹쳐 재생하는 만큼 짧아진 전체 길이 기준
   const frac=Math.min(1,Math.max(0,done/tot));
   $('#prog i').style.width=frac*100+'%';
@@ -578,15 +622,21 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
   const token=++runToken;
   const last=typeof only==='number'?only:(only?from:clips.length-1); // only: true=이 클립만, 숫자=그 클립까지
   prerolledIdx=-1;
+  diag.transitions=[]; // 이번 재생의 진단 기록을 새로 시작
   snapFor=-1; // 새로 재생을 시작하면 이전 장면 캡처는 무효
   const base=tlAt(from);tlStart=[];tlStart[from]=base-startAt; // 전체 영상 시간 기록 시작 (일부만 재생해도 앞 클립 길이만큼 이어진 상태로 시작)
   // 재생할 모든 클립의 글꼴을 시작 전에 한꺼번에 준비 → 클립이 바뀔 때마다 글꼴을 기다리지 않음
   stopAllAudio();
-  // 글꼴과 소리(해독)를 재생 전에 한꺼번에 준비 → 클립이 바뀔 때 기다리지 않음
+  // 글꼴과 소리(해독)를 재생 전에 준비. 앱을 열거나 클립을 추가할 때 이미 해 두었으므로 보통 바로 끝남
   await Promise.all([
-    withTimeout(ensureFonts(clips.slice(from,last+1).flatMap(c=>c.texts)),4000),
-    withTimeout(prepAudio(clips.slice(from,last+1)),6000)
+    withTimeout(ensureFonts(clips.slice(from,last+1).flatMap(c=>c.texts)),1500),
+    withTimeout(prepAudio(clips.slice(from,last+1)),2500)
   ]);
+  // 아이폰에서 소리를 해독하지 못한 클립은 무음으로 재생됨 → 한 번 알려 줌
+  if(isIOS&&!playRange.warned){
+    const bad=clips.slice(from,last+1).filter(c=>c.kind!=='image'&&!hasBuf(c)).length;
+    if(bad){playRange.warned=true;toast(`영상 ${bad}개는 소리를 처리하지 못해 무음으로 재생돼요`)}
+  }
   // 두 번째 영상 요소가 실제로 재생되는지 먼저 확인. 안 되면 처음부터 안전한 단일 요소 모드
   if(!useSingle&&clips.slice(from,last+1).filter(c=>c.kind!=='image').length>1){
     const b=await withTimeout(blessAll(),1500);
@@ -599,24 +649,23 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
   for(let i=from;i<=last;i++){
     if(token!==runToken)return 'cancel';
     await loadClip(i); // 미리 불러둔 영상이면 즉시 교대
-    vid.muted=hasBuf(clips[i]); // 소리는 따로 해독한 오디오로 재생하므로 영상은 음소거 (해독 못 한 클립만 영상 요소의 소리 사용)
+    vid.muted=elMuted(clips[i]); // 소리는 따로 해독한 오디오로 재생하므로 영상은 음소거
     if(token!==runToken)return 'cancel';
-    if(actx&&actx.state!=='running'){try{await withTimeout(actx.resume(),800)}catch(e){}}
+    if(actx&&actx.state!=='running'){try{actx.resume()}catch(e){}} // 기다리지 않음 (클립이 시작될 때마다 기다리면 그만큼 멈춤)
     const isImg=clips[i].kind==='image';
     const wasPre=prerolledIdx===i; // 이미 미리 출발해 재생 중인 영상이면 다시 시작하지 않음
     prerolledIdx=-1;
+    let lagP0=0; // 영상을 시작시킨 시각 (움직이기 시작할 때까지의 지연을 재기 위함)
     if(!isImg&&!wasPre){
       try{
         const at=(i===from&&startAt>0)?startAt:0;
         if(at>0||vid.currentTime>0.01)vid.currentTime=at;
       }catch(e){}
       let started=true,played=false;
-      const p0=performance.now();
+      lagP0=performance.now();
       try{
         // 두 번째 요소는 시작하지 못하는 기기가 있어 대기를 짧게 하고, 못 시작하면 아래에서 단일 모드로 복구
         await withTimeout(Promise.resolve(vid.play()).then(()=>{played=true}),vid===vids[0]?3000:1200);
-        // 재생 시작 지연을 재 두어 첫 전환부터 미리 출발 시점에 반영
-        if(played){lagSamples.push(performance.now()-p0);if(lagSamples.length>4)lagSamples.shift()}
       }
       catch(e){
         // 자동재생 차단 등: 미리보기에서만 음소거로 한 번 더 시도
@@ -627,13 +676,15 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
       startClipAudio(i,vid.currentTime); // 영상이 움직이기 시작하는 순간 소리 시작 (해독된 오디오가 있을 때)
     }
     if(i<last)preloadNext(i+1); // 지금 클립이 재생되는 동안 다음 클립 준비
-    let retry=false,endT=0,inT=0; // inT: 겹쳐 재생하다 넘어가는 순간 다음 클립이 이미 재생된 시간
+    let retry=false,endT=0,inT=0,maxStill=0; // inT: 겹쳐 재생하다 넘어가는 순간 다음 클립이 이미 재생된 시간, maxStill: 두 영상이 모두 멈춰 있던 가장 긴 시간(ms)
     await new Promise(res=>{
       let finished=false,lastT=-1,lastAdv=performance.now(),stalls=0,gen=0,pre=false,preTimer=null,endedAt=0;
+      let lastMoveAt=performance.now(),la=-1,lb=-1;
       const tStart=performance.now()-((i===from&&startAt>0)?startAt*1000:0); // 사진 클립은 시계로 길이를 잼
       const O=overlapLen(); // 다음 클립과 겹쳐 재생하는 시간
+      const movedIn=()=>spare.currentTime-preStartT; // 미리 출발한 다음 영상이 실제로 움직인 시간(초). 출발 위치를 빼서 계산
       // 다음 클립이 앞 클립과 함께 움직이며 섞이는 중인지
-      const blending=()=>pre&&O>0&&!useSingle&&spare.currentTime>0.02&&spare.currentTime<O*0.98;
+      const blending=()=>pre&&O>0&&!useSingle&&movedIn()>0.02&&movedIn()<O*0.98;
       // 앞 클립이 끝났어도 섞이는 중이면 섞기가 끝날 때까지 기다림 (최대 0.6초)
       const mayFinish=()=>!blending()||(endedAt>0&&performance.now()-endedAt>=600);
       const onEnded=()=>{if(!endedAt)endedAt=performance.now();if(mayFinish())finish()};
@@ -653,9 +704,18 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
         try{
           const t=isImg?(performance.now()-tStart)/1000:vid.currentTime;
           endT=t;
+          const nowT=performance.now();
+          if(!isImg){ // 두 영상 중 하나라도 시간이 흐르지 않은 채 얼마나 오래 있었는지 기록 (진단용)
+            const a=vid.currentTime,b=spare.currentTime;
+            if(a!==la||b!==lb){lastMoveAt=nowT;la=a;lb=b}
+            maxStill=Math.max(maxStill,nowT-lastMoveAt);
+          }
+          // 영상이 실제로 움직이기 시작할 때까지의 지연을 재서 다음 영상을 얼마나 일찍 출발시킬지 정하는 데 사용
+          if(pre&&!preMeasured&&movedIn()>0.02){preMeasured=true;lagSamples.push(nowT-preP0);if(lagSamples.length>4)lagSamples.shift()}
+          if(lagP0&&t-((i===from)?startAt:0)>0.03){lagSamples.push(nowT-lagP0);if(lagSamples.length>4)lagSamples.shift();lagP0=0}
           // 다음 클립이 이미 움직이고 있으면 두 영상을 함께 그려서 섞음, 아니면 이 클립만 그림
           const tIn=spare.currentTime;
-          if(pre&&O>0&&!useSingle&&!isImg&&spareIdx===i+1&&tIn>0.02&&drawOverlapFrame(i,t,tIn))inT=tIn;
+          if(pre&&O>0&&!useSingle&&!isImg&&spareIdx===i+1&&movedIn()>0.02&&drawOverlapFrame(i,t,tIn,movedIn()))inT=tIn;
           else drawFrame(clips[i],t);
           updateProgress(i,t);
           if(isImg){
@@ -677,9 +737,9 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
               else if(!preTimer&&isFinite(remain)){preTimer=setTimeout(()=>{preTimer=null;if(!tryPre())preTimer=null},Math.max(0,remain*1000-5))}
             }
             // 섞기가 끝났으면 바로 다음 클립으로 (앞 클립의 'ended' 신호는 늦게 올 수 있어서 기다리지 않음)
-            if(pre&&O>0&&!useSingle&&spare.currentTime>=O){inT=spare.currentTime;finish();return}
+            if(pre&&O>0&&!useSingle&&movedIn()>=O){inT=spare.currentTime;finish();return}
             // 겹치지 않는 설정(전환 없음)이면: 다음 영상이 움직이고 이 클립이 거의 끝났을 때 바로 넘어감
-            if(pre&&O===0&&spare.currentTime>0.02&&end-t<=0.04){finish();return}
+            if(pre&&O===0&&movedIn()>0.02&&end-t<=0.04){finish();return}
             const now=performance.now();
             if(t!==lastT){lastT=t;lastAdv=now}
             else if(vid!==vids[0]&&!useSingle&&now-lastAdv>1200){
@@ -699,6 +759,7 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
       };
       step(gen);
     });
+    if(!isImg)diag.transitions.push({clip:i+1,방식:i===from?'첫 클립':(inT>0?'겹침':'이어붙임'),최장멈춤ms:Math.round(maxStill)}); // 진단 기록
     stopClipAudio(i); // 이 클립의 소리는 클립이 끝나면 함께 끝냄 (미리 출발한 다음 클립의 소리는 그대로)
     if(retry&&token===runToken){i--;continue} // 같은 클립을 단일 모드로 다시
     // 다음 클립은 이 클립이 실제로 끝난 시각에서 이어서 시작 (이어 표시되는 텍스트의 효과 시간이 끊기지 않게)
@@ -708,7 +769,10 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
   return token===runToken?'done':'cancel';
 }
 function stopPlay(){runToken++;prerolledIdx=-1;stopAllAudio();vids.forEach(v=>v.pause());playing=false;setPlayUI()}
-function setPlayUI(){$('#btnPlay').textContent=playing?'⏸':'▶'}
+function setPlayUI(){
+  $('#btnPlay').textContent=playing?'⏸':'▶';
+  document.body.classList.toggle('busy',playing||exporting); // 재생·내보내기 중에는 화면 효과를 꺼서 영상에 자원을 몰아줌
+}
 async function togglePlay(only){
   initAudio();
   if(playing){stopPlay();return}
@@ -728,7 +792,7 @@ async function selectClip(i){
   if(clips[i].kind!=='image')await new Promise(r=>{vid.addEventListener('seeked',r,{once:true});try{vid.currentTime=0.05}catch(e){}setTimeout(r,500)});
   await withTimeout(ensureFonts(clips[i].texts),2000); // 글꼴이 안 불러와져도 화면이 멈추지 않게
   drawFrame(clips[i],0,true);
-  updateProgress(i,0);
+  updateProgress(i,0,true);
   renderList();
 }
 
@@ -757,6 +821,7 @@ function renderList(){
 async function addClip(blob,dur,thumb,kind){
   const c={id:Date.now()+'-'+Math.random().toString(36).slice(2,7),blob,url:URL.createObjectURL(blob),dur:dur||0,thumb:thumb||'',texts:[],kind:kind||'video'};
   clips.push(c);
+  prepAudio([c]); // 백그라운드에서 소리를 미리 해독해 두어 재생 시작이 늦어지지 않게
   await saveBlob(c);await saveOrder();
   return c;
 }
@@ -1049,7 +1114,7 @@ $('#btnExport').onclick=async()=>{
   if(!window.MediaRecorder||!cv.captureStream){toast('이 브라우저는 내보내기를 지원하지 않아요');return}
   if(playing)stopPlay();
   initAudio();
-  exporting=true;$('#exp').hidden=false;$('#expRes').hidden=true;$('#expRes').innerHTML='';
+  exporting=true;setPlayUI();$('#exp').hidden=false;$('#expRes').hidden=true;$('#expRes').innerHTML='';
   expUI('방울방울 영상을 만드는 중이에요… 🫧<br><small>끝날 때까지 화면을 켜 두고 이 앱을 보고 있어 주세요.<br>(재생 시간만큼 걸려요)</small>',true,[['취소',()=>{runToken++;vid.pause()}]]);
   let wake=null;try{wake=await navigator.wakeLock.request('screen')}catch(e){}
   const q=parseFloat($('#qSel').value)||1;
@@ -1067,8 +1132,8 @@ $('#btnExport').onclick=async()=>{
   await new Promise(r=>{mr.onstop=r;mr.stop()});
   if(prevGain)prevGain.gain.value=1;
   if(wake)try{wake.release()}catch(e){}
-  exporting=false;
-  setRes(1);redraw();
+  exporting=false;setPlayUI();
+  setRes(PREVIEW_S);redraw();
   if(!ok){$('#exp').hidden=true;toast('내보내기를 취소했어요');await selectClip(0);return}
   const type=mr.mimeType||mime||'video/webm',ext=type.includes('mp4')?'mp4':'webm';
   const blob=new Blob(chunks,{type}),url=URL.createObjectURL(blob);
@@ -1081,6 +1146,36 @@ $('#btnExport').onclick=async()=>{
   const r=$('#expRes');r.hidden=false;r.innerHTML=`<video src="${url}" controls playsinline></video>`;
 };
 
+/* ---------- 재생 진단 ----------
+   앱 이름을 빠르게 5번 누르면 열림. 재생이 끊길 때 이 화면을 캡처해서 보내 주면 원인을 정확히 알 수 있음 */
+function diagText(){
+  const v=clips.filter(c=>c.kind!=='image').length,p=clips.length-v;
+  const L=[];
+  L.push(`기기: ${isIOS?'아이폰/아이패드':'그 외'} / ${/Safari/.test(navigator.userAgent)&&!/Chrome|CriOS/.test(navigator.userAgent)?'Safari':(/CriOS|Chrome/.test(navigator.userAgent)?'Chrome':'기타')}`);
+  L.push(`영상 요소: ${useSingle?'하나만 사용(안전 모드)':'두 개 사용(겹쳐 재생)'}`);
+  L.push(`전환: ${TRANS.find(x=>x[0]===trKind)[1]} / 겹침 ${overlapLen()}초`);
+  L.push(`클립: 영상 ${v}개, 사진 ${p}개 (길이 ${clips.map(c=>(+c.dur||0).toFixed(1)).join(', ')}초)`);
+  L.push(`소리 해독: ${clips.filter(c=>c.kind!=='image').map(c=>hasBuf(c)?'성공':(abuf.get(c.id)==='pending'?'진행중':'실패')).join(', ')||'-'}`);
+  L.push(`영상 시작 지연(ms): ${lagSamples.map(Math.round).join(', ')||'아직 측정 전'} → 미리 출발 ${Math.round(leadSec()*1000)}ms 전`);
+  L.push(`미리보기 화질: ${Math.round(W*S)}x${Math.round(H*S)}`);
+  L.push('');
+  L.push('가장 최근 재생(클립별):');
+  if(!diag.transitions.length)L.push('  아직 재생 기록이 없어요. 재생한 뒤 다시 열어 주세요.');
+  diag.transitions.forEach(x=>L.push(`  클립 ${x.clip}: ${x.방식}, 두 영상이 함께 멈춘 최장 ${x.최장멈춤ms}ms`));
+  return L.join('\n');
+}
+(()=>{
+  let n=0,t0=0;
+  $('header h1').addEventListener('click',()=>{
+    const now=performance.now();n=(now-t0<1500)?n+1:1;t0=now;
+    if(n>=5){n=0;$('#diagTxt').textContent=diagText();$('#diag').hidden=false}
+  });
+  $('#diagClose').onclick=()=>{$('#diag').hidden=true};
+  $('#diagCopy').onclick=async()=>{
+    try{await navigator.clipboard.writeText($('#diagTxt').textContent);toast('복사했어요')}catch(e){toast('복사하지 못했어요. 화면을 캡처해 주세요')}
+  };
+})();
+
 /* ---------- 배경 방울 ---------- */
 (()=>{const b=$('#bubbles');for(let i=0;i<16;i++){const e=document.createElement('i'),z=14+Math.random()*46;
 e.style.cssText=`left:${Math.random()*100}%;width:${z}px;height:${z}px;animation-duration:${9+Math.random()*10}s;animation-delay:${-Math.random()*16}s`;b.appendChild(e)}})();
@@ -1092,7 +1187,12 @@ if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostnam
 
 /* ---------- 시작 ---------- */
 buildChips();
-(async()=>{await loadAll();renderList();if(clips.length)await selectClip(0);else drawFrame(null,0)})();
+(async()=>{
+  await loadAll();renderList();
+  if(clips.length)await selectClip(0);else drawFrame(null,0);
+  // 재생 버튼을 누르기 전에 소리 해독과 글꼴 불러오기를 미리 해 둠
+  prepAudio(clips);ensureFonts(clips.flatMap(c=>c.texts));
+})();
 </script>
 </body>
 </html>
