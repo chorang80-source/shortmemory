@@ -135,6 +135,8 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
     <label>외곽선색 <input type="color" id="fStroke"></label>
     <label><input type="checkbox" id="fBox"> 배경 박스</label>
   </div>
+  <div class="lbl">모든 클립에 한꺼번에</div>
+  <div class="row"><button id="fAllAdd">📋 이 텍스트를 모든 클립에 추가</button><button id="fAllStyle">🎨 이 스타일을 모든 클립에 적용</button></div>
   <div class="row"><button id="fPlay">▶ 효과 미리보기</button><button id="fDel">이 텍스트 삭제</button></div>
 </div>
 
@@ -528,6 +530,30 @@ cv.addEventListener('pointermove',e=>{
 const endDrag=()=>{if(!drag)return;drag=null;const c=clips[ei];if(c)saveSoon(c)};
 cv.addEventListener('pointerup',endDrag);cv.addEventListener('pointercancel',endDrag);
 $('#fDel').onclick=()=>{const c=clips[ei];if(!c||!c.texts.length)return;c.texts.splice(li,1);li=Math.max(0,li-1);syncSheet();redraw();saveClip(c);renderListKeep()};
+/* 모든 클립에 한꺼번에 적용 */
+$('#fAllAdd').onclick=()=>{
+  const l=layer();if(!l||!l.text)return;
+  let n=0;
+  clips.forEach((c,i)=>{
+    if(i===ei||c.texts.some(t=>t.text===l.text&&t.font===l.font))return;
+    c.texts.push({...l});saveClip(c);n++;
+  });
+  renderListKeep();
+  toast(n?`다른 클립 ${n}개에 추가했어요`:'이미 모든 클립에 들어 있어요');
+};
+$('#fAllStyle').onclick=()=>{
+  const l=layer();if(!l)return;
+  const targets=clips.filter(c=>c!==clips[ei]&&c.texts[li]);
+  if(!targets.length){toast(`다른 클립에 T${li+1} 텍스트가 없어요`);return}
+  if(!confirm(`다른 클립 ${targets.length}개의 T${li+1} 텍스트 모양(글꼴·크기·색·효과·위치)을 이 텍스트와 똑같이 바꿀까요? 글자 내용은 그대로예요.`))return;
+  targets.forEach(c=>{
+    const t=c.texts[li];
+    Object.assign(t,{font:l.font,size:l.size,color:l.color,stroke:l.stroke,sw:l.sw,box:l.box,effect:l.effect,x:l.x,y:l.y,delay:l.delay});
+    saveClip(c);
+  });
+  renderListKeep();
+  toast(`${targets.length}개 클립에 스타일을 적용했어요`);
+};
 $('#fPlay').onclick=()=>togglePlayOnce();
 async function togglePlayOnce(){ if(playing){stopPlay()}; initAudio(); if(prevGain)prevGain.gain.value=1; playing=true;setPlayUI(); const ok=await playRange(ei,true); if(ok){playing=false;setPlayUI();await selectClip(ei)} }
 $('#btnPlay').onclick=()=>togglePlay();
