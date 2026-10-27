@@ -39,6 +39,10 @@ header h1 span{display:inline-block;animation:bob 2.4s ease-in-out infinite}
 #prog{flex:1;height:10px;background:#fff;border:2px solid var(--line);border-radius:999px;overflow:hidden}
 #prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc2),var(--acc));border-radius:999px}
 #time{font-size:12px;color:var(--sub);min-width:72px;text-align:right}
+#trBar{flex:none;display:flex;align-items:center;gap:8px;padding:2px 16px 0;color:var(--sub);font-size:14px}
+#trBar span{white-space:nowrap}
+#trBar .chips{flex:1;padding:4px 0}
+#trBar .chips button{font-size:14px;padding:5px 12px}
 #list{flex:1;overflow:auto;padding:10px 16px;display:flex;flex-direction:column;gap:8px}
 .empty{color:var(--sub);text-align:center;margin-top:24px;line-height:1.8;font-size:16px}
 .empty .big{display:block;font-size:44px;animation:bob 2.4s ease-in-out infinite}
@@ -98,6 +102,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
     <canvas id="cv" width="720" height="1280"></canvas>
     <div id="playbar"><button id="btnPlay">▶</button><div id="prog"><i></i></div><span id="time">0:00 / 0:00</span></div>
   </div>
+  <div id="trBar"><span>✨ 전환</span><div class="chips" id="trChips"></div></div>
   <div id="list"></div>
   <div id="actions">
     <button class="rec" id="btnRec">● 촬영</button>
@@ -333,14 +338,15 @@ function drawFrame(clip,t,settled){
   ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
   const isImg=!!clip&&clip.kind==='image',src=isImg?img:vid;
   const vw=isImg?img.naturalWidth:vid.videoWidth,vh=isImg?img.naturalHeight:vid.videoHeight;
+  const k=clip?clips.indexOf(clip):-1;
   if(vw&&vh){
     let s=Math.max(W/vw,H/vh);
     if(isImg&&!settled&&clip.dur>0)s*=1+0.08*Math.min(1,t/clip.dur); // 사진은 천천히 확대
-    const dw=vw*s,dh=vh*s;
-    ctx.drawImage(src,(W-dw)/2,(H-dh)/2,dw,dh);
+    const tr=transitionOf(clip,k,t,settled);
+    if(tr)drawWithTransition(src,vw,vh,s,tr);
+    else{const dw=vw*s,dh=vh*s;ctx.drawImage(src,(W-dw)/2,(H-dh)/2,dw,dh)}
   }
   if(clip){
-    const k=clips.indexOf(clip);
     if(k<0)clip.texts.forEach(l=>drawLayer(l,settled?l.delay+10:t));
     else for(const [l,j] of layersFor(k)){
       // 앞 클립에서 시작한 텍스트는 전체 영상 시간으로 이어서 계산 → 클립이 바뀌어도 효과가 다시 시작되지 않고 그대로 유지
@@ -348,6 +354,48 @@ function drawFrame(clip,t,settled){
     }
   }
 }
+/* ---------- 클립 전환 효과 ----------
+   클립 하나만으로 그리는 방식: 앞 클립은 끝 0.25초 동안 사라지고, 다음 클립은 시작 0.25초 동안 나타남.
+   (영상 요소를 겹쳐 재생하지 않아 모든 기기에서 안정적이고, 전체 길이와 텍스트 시간이 변하지 않음)
+   텍스트는 영상 위에 그대로 유지되고 영상 부분에만 효과가 적용됨 */
+const TRANS=[['none','없음'],['fade','페이드'],['white','화이트'],['slide','슬라이드'],['zoom','줌'],['iris','방울'],['curtain','커튼']];
+const TR_HALF=0.25;
+let trKind='fade';
+try{const v=localStorage.getItem('tr');if(v&&TRANS.some(x=>x[0]===v))trKind=v}catch(e){}
+/* 전환 구간이면 {p:0~1(0=안 보임,1=완전히 보임), out:사라지는 중} 아니면 null */
+function transitionOf(clip,k,t,settled){
+  if(settled||trKind==='none'||k<0||clips.length<2)return null;
+  const playingThis=clips[cur]===clip&&clip.kind!=='image'&&isFinite(vid.duration)&&vid.duration>0;
+  const dur=playingThis?vid.duration:(clip.dur||0);
+  const half=Math.min(TR_HALF,dur/3);
+  if(half<=0.05)return null;
+  if(k>0&&t<half)return {p:Math.max(0,t/half),out:false};
+  if(k<clips.length-1&&dur-t<half)return {p:Math.max(0,(dur-t)/half),out:true};
+  return null;
+}
+function drawWithTransition(src,vw,vh,s,tr){
+  const e=tr.p*tr.p*(3-2*tr.p); // 부드럽게 시작하고 끝나는 곡선
+  const bg=trKind==='white'?'#ffffff':(trKind==='iris'?'#cdeeff':'#000000');
+  ctx.fillStyle=bg;ctx.fillRect(0,0,W,H);
+  const dw=vw*s,dh=vh*s,dx=(W-dw)/2,dy=(H-dh)/2;
+  ctx.save();
+  switch(trKind){
+    case 'fade':case 'white':ctx.globalAlpha=e;break;
+    case 'slide':ctx.translate(tr.out?-(1-e)*W:(1-e)*W,0);break; // 나갈 땐 왼쪽으로, 들어올 땐 오른쪽에서
+    case 'zoom':{const z=1+0.25*(1-e);ctx.globalAlpha=e;ctx.translate(W/2,H/2);ctx.scale(z,z);ctx.translate(-W/2,-H/2);break}
+    case 'iris':{ctx.beginPath();ctx.arc(W/2,H/2,Math.max(0.01,Math.hypot(W,H)/2*e),0,Math.PI*2);ctx.clip();break} // 방울이 커지거나 줄어듦
+  }
+  ctx.drawImage(src,dx,dy,dw,dh);
+  ctx.restore();
+  if(trKind==='iris'&&e>0.02&&e<0.98){ // 방울 테두리
+    ctx.save();ctx.lineWidth=10;ctx.strokeStyle='rgba(255,255,255,.9)';
+    ctx.beginPath();ctx.arc(W/2,H/2,Math.hypot(W,H)/2*e,0,Math.PI*2);ctx.stroke();ctx.restore();
+  }
+  if(trKind==='curtain'){ // 양쪽에서 커튼이 닫히고 열림
+    const bw=(1-e)*W/2;ctx.fillStyle='#000';ctx.fillRect(0,0,bw,H);ctx.fillRect(W-bw,0,bw,H);
+  }
+}
+
 /* 텍스트는 처음 나타난 클립(j)에서 시작해 span개 클립 동안(또는 끝까지) 이어서 표시됨 */
 function layersFor(k){
   const out=[];
@@ -430,11 +478,11 @@ function updateProgress(i,t){
   $('#time').textContent=fmt(before+t)+' / '+fmt(tot);
 }
 /* 반환: 'done'(끝까지 재생) | 'cancel'(중지·취소됨) | 'fail'(재생 시작 실패) */
-async function playRange(from,only){
+async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시각(초)부터 재생 (전환 미리보기용)
   const token=++runToken;
   const last=typeof only==='number'?only:(only?from:clips.length-1); // only: true=이 클립만, 숫자=그 클립까지
   prerolledIdx=-1;
-  const base=tlAt(from);tlStart=[];tlStart[from]=base; // 전체 영상 시간 기록 시작 (일부만 재생해도 앞 클립 길이만큼 이어진 상태로 시작)
+  const base=tlAt(from);tlStart=[];tlStart[from]=base-startAt; // 전체 영상 시간 기록 시작 (일부만 재생해도 앞 클립 길이만큼 이어진 상태로 시작)
   // 재생할 모든 클립의 글꼴을 시작 전에 한꺼번에 준비 → 클립이 바뀔 때마다 글꼴을 기다리지 않음
   await withTimeout(ensureFonts(clips.slice(from,last+1).flatMap(c=>c.texts)),4000);
   // 두 번째 영상 요소가 실제로 재생되는지 먼저 확인. 안 되면 처음부터 안전한 단일 요소 모드
@@ -456,7 +504,10 @@ async function playRange(from,only){
     const wasPre=prerolledIdx===i; // 이미 미리 출발해 재생 중인 영상이면 다시 시작하지 않음
     prerolledIdx=-1;
     if(!isImg&&!wasPre){
-      try{if(vid.currentTime>0.01)vid.currentTime=0}catch(e){}
+      try{
+        const at=(i===from&&startAt>0)?startAt:0;
+        if(at>0||vid.currentTime>0.01)vid.currentTime=at;
+      }catch(e){}
       let started=true,played=false;
       const p0=performance.now();
       try{
@@ -476,7 +527,7 @@ async function playRange(from,only){
     let retry=false,endT=0;
     await new Promise(res=>{
       let finished=false,lastT=-1,lastAdv=performance.now(),stalls=0,gen=0,pre=false,preTimer=null;
-      const tStart=performance.now(); // 사진 클립은 시계로 길이를 잼
+      const tStart=performance.now()-((i===from&&startAt>0)?startAt*1000:0); // 사진 클립은 시계로 길이를 잼
       const finish=()=>{if(finished)return;finished=true;clearTimeout(preTimer);vid.removeEventListener('ended',finish);res()};
       // 다음 영상 미리 출발 (준비가 안 됐으면 false)
       const tryPre=()=>{
@@ -796,6 +847,38 @@ $('#fSpan').addEventListener('change',e=>{
   l.span=n;l.toEnd=(n===rem&&rem>1); // 끝까지를 고르면 클립이 더 추가돼도 계속 끝까지 이어짐
   changed();
 });
+/* 전환 효과 고르기 + 클립 1→2 사이를 바로 미리 보기 */
+(()=>{
+  const box=$('#trChips');
+  const sync=()=>box.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.k===trKind));
+  TRANS.forEach(([k,n])=>{
+    const b=document.createElement('button');b.textContent=n;b.dataset.k=k;
+    b.onclick=()=>{
+      trKind=k;try{localStorage.setItem('tr',k)}catch(e){}
+      sync();
+      if(k!=='none')previewTransition();
+    };
+    box.appendChild(b);
+  });
+  sync();
+})();
+async function previewTransition(){
+  if(clips.length<2){toast('클립이 2개 이상일 때 전환 효과가 보여요');return}
+  if(playing)stopPlay();
+  initAudio();if(prevGain)prevGain.gain.value=1;
+  playing=true;setPlayUI();
+  const startAt=Math.max(0,(clips[0].dur||1)-0.8); // 첫 클립 끝 0.8초 전부터
+  let finished=false;
+  const run=playRange(0,1,startAt).then(r=>{finished=true;return r});
+  while(!finished){
+    // 두 번째 클립이 0.9초 지나 전환이 끝나면 미리보기 종료
+    if(playing&&cur===1&&vid.currentTime>0.9){stopPlay();break}
+    await sleep(40);
+  }
+  await run;
+  playing=false;setPlayUI();
+  await selectClip(0);
+}
 $('#fPlay').onclick=()=>togglePlayOnce();
 async function togglePlayOnce(){
   if(playing){stopPlay()}
