@@ -87,7 +87,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 #toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#2b3a55ee;color:#fff;padding:10px 18px;border-radius:999px;font-size:15px;z-index:50;opacity:0;transition:opacity .25s;pointer-events:none}
 #toast.show{opacity:1}
 [hidden]{display:none!important}
-#vid{position:fixed;left:0;top:0;width:2px;height:2px;opacity:.01;pointer-events:none}
+#vid,#vid2{position:fixed;left:0;top:0;width:2px;height:2px;opacity:.01;pointer-events:none}
 </style>
 </head>
 <body>
@@ -101,7 +101,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
   <div id="list"></div>
   <div id="actions">
     <button class="rec" id="btnRec">● 촬영</button>
-    <label>📁 영상·사진<input type="file" id="fImport" accept="video/*,image/*" multiple hidden></label>
+    <label>📁 가져오기<input type="file" id="fImport" accept="video/*,image/*" multiple hidden></label>
     <label>📷 기본 카메라<input type="file" id="fNative" accept="video/*" capture="environment" hidden></label>
   </div>
 </div>
@@ -150,12 +150,16 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 
 <div id="toast"></div>
 <video id="vid" playsinline></video>
+<video id="vid2" playsinline></video>
 
 <script>
 'use strict';
 const $=s=>document.querySelector(s);
 const W=720,H=1280;
-const cv=$('#cv'),ctx=cv.getContext('2d'),vid=$('#vid');
+const cv=$('#cv'),ctx=cv.getContext('2d');
+// 영상 요소 2개를 번갈아 사용: 재생 중인 vid, 다음 클립을 미리 불러두는 spare
+const vids=[$('#vid'),$('#vid2')];
+let vid=vids[0],spare=vids[1],spareIdx=-1;
 const img=new Image(); // 사진 클립용
 let S=1; // 해상도 배율 (논리 좌표는 항상 720x1280)
 function setRes(s){S=s;cv.width=Math.round(W*s);cv.height=Math.round(H*s)}
@@ -188,13 +192,24 @@ function initAudio(){
   if(!actx){
     try{
       actx=new(window.AudioContext||window.webkitAudioContext)();
-      srcNode=actx.createMediaElementSource(vid);
       dest=actx.createMediaStreamDestination();
-      prevGain=actx.createGain();
-      srcNode.connect(dest);srcNode.connect(prevGain);prevGain.connect(actx.destination);
+      prevGain=actx.createGain();prevGain.connect(actx.destination);
+      // 두 영상 요소 모두 같은 오디오 경로로 연결 (내보내기에 소리가 들어가도록)
+      vids.forEach(v=>{const s=actx.createMediaElementSource(v);s.connect(dest);s.connect(prevGain)});
     }catch(e){actx=null}
   }
   if(actx&&actx.state==='suspended')actx.resume();
+  unlockSpare();
+}
+/* iOS Safari: 두 번째 영상 요소도 사용자 터치 안에서 한 번 재생해 둬야 이후 자동 재생이 허용됨 */
+function unlockSpare(){
+  try{
+    if(unlockSpare.done)return;
+    const first=clips.find(c=>c.kind!=='image');if(!first)return;
+    unlockSpare.done=true;
+    const v=spare;spareIdx=-1;v.muted=true;v.src=first.url;
+    v.play().then(()=>{if(v===spare)v.pause();v.muted=false}).catch(()=>{v.muted=false});
+  }catch(e){}
 }
 function pickMime(){
   const c=['video/mp4;codecs=avc1,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
@@ -308,6 +323,11 @@ function loadClip(i){
     if(img.src===c0.url&&img.complete&&img.naturalWidth)return Promise.resolve();
     return new Promise(res=>{img.onload=img.onerror=()=>res();img.src=c0.url;setTimeout(res,3000)});
   }
+  // 미리 불러둔 영상이 있으면 요소를 맞바꿔 바로 사용 (끊김 없는 전환)
+  if(spareIdx===i&&spare.readyState>=2){
+    const old=vid;vid=spare;spare=old;spareIdx=-1;cur=i;old.pause();
+    return Promise.resolve();
+  }
   return new Promise(res=>{
     const c=clips[i];cur=i;let done=false;
     const evs=['loadeddata','canplay','error'];
@@ -315,6 +335,14 @@ function loadClip(i){
     evs.forEach(e=>vid.addEventListener(e,fin));
     vid.preload='auto';vid.src=c.url;vid.load();setTimeout(fin,3000);
   });
+}
+/* 다음 클립을 재생 중에 미리 준비 (영상은 spare 요소에 로드, 사진은 디코딩, 글꼴도 미리 로드) */
+function preloadNext(i){
+  const c=clips[i];if(!c)return;
+  ensureFonts(c.texts);
+  if(c.kind==='image'){const p=new Image();p.src=c.url;if(p.decode)p.decode().catch(()=>{});return}
+  if(spareIdx===i)return;
+  spareIdx=i;spare.pause();spare.muted=false;spare.preload='auto';spare.src=c.url;spare.load();
 }
 const fmt=s=>{s=Math.max(0,Math.round(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0')};
 const totalDur=()=>clips.reduce((s,c)=>s+(c.dur||0),0);
@@ -331,14 +359,14 @@ async function playRange(from,only){
   const last=only?from:clips.length-1;
   for(let i=from;i<=last;i++){
     if(token!==runToken)return 'cancel';
+    await loadClip(i); // 미리 불러둔 영상이면 즉시 교대
     vid.muted=false;
-    await loadClip(i);
     await withTimeout(ensureFonts(clips[i].texts),1500); // 글꼴이 늦어도 멈추지 않게
     if(token!==runToken)return 'cancel';
     if(actx&&actx.state!=='running'){try{await withTimeout(actx.resume(),800)}catch(e){}}
     const isImg=clips[i].kind==='image';
     if(!isImg){
-      try{vid.currentTime=0}catch(e){}
+      try{if(vid.currentTime>0.01)vid.currentTime=0}catch(e){}
       let started=true;
       try{await withTimeout(vid.play(),3000)}
       catch(e){
@@ -348,6 +376,7 @@ async function playRange(from,only){
       }
       if(!started){toast(`클립 ${i+1} 재생을 시작하지 못했어요`);return 'fail'}
     }
+    if(i<last)preloadNext(i+1); // 지금 클립이 재생되는 동안 다음 클립 준비
     await new Promise(res=>{
       let finished=false,lastT=-1,lastAdv=performance.now(),stalls=0,gen=0;
       const tStart=performance.now(); // 사진 클립은 시계로 길이를 잼
@@ -388,7 +417,7 @@ async function playRange(from,only){
   }
   return token===runToken?'done':'cancel';
 }
-function stopPlay(){runToken++;vid.pause();playing=false;setPlayUI()}
+function stopPlay(){runToken++;vids.forEach(v=>v.pause());playing=false;setPlayUI()}
 function setPlayUI(){$('#btnPlay').textContent=playing?'⏸':'▶'}
 async function togglePlay(only){
   initAudio();
