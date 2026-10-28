@@ -54,7 +54,8 @@ header h1 span{display:inline-block;animation:bob 2.4s ease-in-out infinite}
 #list{flex:1;overflow:auto;padding:10px 16px;display:flex;flex-direction:column;gap:8px}
 .empty{color:var(--sub);text-align:center;margin-top:24px;line-height:1.8;font-size:16px}
 .empty .big{display:block;font-size:44px;animation:bob 2.4s ease-in-out infinite}
-.card{display:flex;gap:10px;align-items:center;background:var(--panel);border:2px solid #fff;border-radius:22px;padding:8px;box-shadow:0 4px 14px rgba(90,150,210,.18);animation:pop .35s ease-out both}
+.card{display:flex;gap:10px;align-items:center;background:var(--panel);border:2px solid #fff;border-radius:22px;padding:8px;box-shadow:0 4px 14px rgba(90,150,210,.18)}
+.card.new{animation:pop .35s ease-out both} /* 새로 추가한 클립에만 나타나는 효과 (목록을 다시 그릴 때마다 보이면 깜빡임) */
 .card.sel{border-color:var(--acc)}
 .card img,.card .noimg{width:45px;height:80px;object-fit:cover;border-radius:14px;background:#cfe;flex:none}
 .meta{flex:1;min-width:0;font-size:15px}
@@ -876,7 +877,7 @@ function renderList(){
   if(!clips.length){L.innerHTML='<div class="empty"><span class="big">🫧</span>아직 방울이 없어요<br>아래 <b>● 촬영</b>으로 2~5초씩 담거나<br>📁 가져오기로 영상을 추가해 보세요</div>';return}
   L.innerHTML='';
   clips.forEach((c,i)=>{
-    const d=document.createElement('div');d.className='card'+(i===cur?' sel':'');
+    const d=document.createElement('div');d.className='card'+(i===cur?' sel':'')+(c.isNew?' new':'');c.isNew=false;
     d.innerHTML=`${c.thumb?`<img src="${c.thumb}">`:'<div class="noimg"></div>'}
       <div class="meta"><b>#${i+1} · ${c.dur?c.dur.toFixed(1)+'초':'?'}${c.kind==='image'?' · 🖼 사진':''}</b><span>${c.texts.length?c.texts.map(t=>t.text.replace(/\n/g,' ')+(t.toEnd?' ➜끝까지':((t.span||1)>1?' ➜'+t.span+'개':''))).join(' / '):'텍스트 없음'}</span></div>
       <div class="btns"><button data-a="edit">✎</button><button data-a="del">🗑</button></div>
@@ -945,7 +946,7 @@ $('#undoBtn').onclick=async()=>{
   await selectClip(Math.min(p.i,clips.length-1));
 };
 async function addClip(blob,dur,thumb,kind,pcm){
-  const c={id:Date.now()+'-'+Math.random().toString(36).slice(2,7),blob,url:URL.createObjectURL(blob),dur:dur||0,thumb:thumb||'',texts:[],kind:kind||'video',pcm:pcm||null};
+  const c={id:Date.now()+'-'+Math.random().toString(36).slice(2,7),blob,url:URL.createObjectURL(blob),dur:dur||0,thumb:thumb||'',texts:[],kind:kind||'video',pcm:pcm||null,isNew:true};
   clips.push(c);
   // 앱에서 녹화한 영상은 녹화 중에 받아 둔 소리를 그대로 사용(해독 불필요). 가져온 영상은 백그라운드에서 소리를 미리 해독
   const pb=pcm?bufFromPcm(pcm):null;
