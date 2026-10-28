@@ -60,8 +60,13 @@ header h1 span{display:inline-block;animation:bob 2.4s ease-in-out infinite}
 .meta{flex:1;min-width:0;font-size:15px}
 .meta b{display:block}
 .meta span{color:var(--sub);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.btns{display:grid;grid-template-columns:repeat(2,36px);gap:4px}
-.btns button{padding:5px 0;font-size:14px;box-shadow:0 2px 0 var(--line)}
+.card{cursor:pointer;position:relative;transition:transform .15s}
+.grip{flex:none;width:44px;align-self:stretch;display:flex;align-items:center;justify-content:center;font-size:24px;color:var(--sub);touch-action:none;cursor:grab;border-radius:14px;user-select:none;-webkit-user-select:none}
+.card.dragging{transition:none;z-index:5;box-shadow:0 10px 26px rgba(60,110,180,.4);opacity:.95}
+#undo{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom));transform:translate(-50%,20px);background:#334;color:#fff;border-radius:22px;padding:8px 8px 8px 16px;display:flex;gap:10px;align-items:center;opacity:0;pointer-events:none;transition:.2s;z-index:50;font-size:15px}
+#undo.show{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+#undo button{padding:5px 12px}
+#shDel{margin-right:6px}
 #actions{display:flex;gap:8px;padding:10px 16px calc(10px + env(safe-area-inset-bottom));background:rgba(255,255,255,.55);backdrop-filter:blur(8px);border-radius:26px 26px 0 0}
 #actions button,#actions label{flex:1;text-align:center;font-size:15px;padding:12px 4px;border-radius:999px;background:#fff;border:2px solid var(--line);box-shadow:0 3px 0 var(--line)}
 #actions .rec{background:linear-gradient(135deg,#ff9cc9,#ff6fa8);border-color:#ff6fa8;color:#fff;box-shadow:0 3px 0 #e0558e;animation:pulse 2s ease-in-out infinite}
@@ -131,7 +136,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 </div>
 
 <div id="sheet" hidden>
-  <div class="sh-head"><b id="shTitle"></b><button class="pri" id="shClose">완료</button></div>
+  <div class="sh-head"><b id="shTitle"></b><span><button id="shDel" title="이 클립 삭제">🗑 삭제</button><button class="pri" id="shClose">완료</button></span></div>
   <div class="row" id="imgRow" hidden><label style="display:block;width:100%">🖼 사진 보여주는 시간 <b id="imgDurVal"></b><input type="range" id="fImgDur" min="1" max="10" step="0.5"></label></div>
   <div class="row" id="tabs"></div>
   <div class="lbl">💡 위쪽 영상 화면에서 글자를 손가락으로 끌어 옮길 수 있어요</div>
@@ -164,6 +169,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 
 <div id="diag" hidden><div class="box"><b>재생 진단</b><pre id="diagTxt"></pre><div class="row"><button id="diagCopy">복사</button><button id="diagClose" class="pri">닫기</button></div></div></div>
 
+<div id="undo"><span>클립을 삭제했어요</span><button id="undoBtn" class="pri">되돌리기</button></div>
 <div id="toast"></div>
 <video id="vid" playsinline muted></video>
 <video id="vid2" playsinline muted></video>
@@ -860,19 +866,65 @@ function renderList(){
     const d=document.createElement('div');d.className='card'+(i===cur?' sel':'');
     d.innerHTML=`${c.thumb?`<img src="${c.thumb}">`:'<div class="noimg"></div>'}
       <div class="meta"><b>#${i+1} · ${c.dur?c.dur.toFixed(1)+'초':'?'}${c.kind==='image'?' · 🖼 사진':''}</b><span>${c.texts.length?c.texts.map(t=>t.text.replace(/\n/g,' ')+(t.toEnd?' ➜끝까지':((t.span||1)>1?' ➜'+t.span+'개':''))).join(' / '):'텍스트 없음'}</span></div>
-      <div class="btns"><button data-a="up">▲</button><button data-a="down">▼</button><button data-a="edit">✎</button><button data-a="del">🗑</button></div>`;
-    d.onclick=e=>{
-      const a=e.target.dataset.a;
-      if(a==='up'&&i>0){[clips[i-1],clips[i]]=[clips[i],clips[i-1]];cur=i-1;saveOrder();renderList()}
-      else if(a==='down'&&i<clips.length-1){[clips[i+1],clips[i]]=[clips[i],clips[i+1]];cur=i+1;saveOrder();renderList()}
-      else if(a==='edit')openSheet(i);
-      else if(a==='del'){if(confirm('이 클립을 삭제할까요?')){delClip(c.id);abuf.delete(c.id);URL.revokeObjectURL(c.url);clips.splice(i,1);saveOrder();selectClip(Math.min(i,clips.length-1))}}
-      else selectClip(i);
-    };
+      <div class="grip" title="끌어서 순서 바꾸기">⠿</div>`;
+    d.dataset.i=i;
+    d.onclick=e=>{if(!e.target.closest('.grip'))openSheet(i)}; // 카드를 누르면 바로 수정 화면
+    d.querySelector('.grip').addEventListener('pointerdown',e=>startReorder(e,d,i));
     L.appendChild(d);
   });
   const tot=timelineTotal();$('#time').textContent=(playing||exporting?$('#time').textContent:'0:00 / '+fmt(tot));
 }
+/* 순서 바꾸기: 오른쪽 ⠿ 손잡이를 잡고 위아래로 끌면 카드가 따라 움직이고, 놓으면 그 자리로 확정 */
+function startReorder(e,card,from){
+  e.preventDefault();e.stopPropagation();
+  const L=$('#list'),cards=[...L.children],h=card.offsetHeight+8,y0=e.clientY,sc0=L.scrollTop;
+  let to=from;
+  card.classList.add('dragging');try{card.setPointerCapture(e.pointerId)}catch(_){}
+  const place=()=>{
+    const dy=curY-y0+(L.scrollTop-sc0);
+    card.style.transform=`translateY(${dy}px)`;
+    to=Math.max(0,Math.min(cards.length-1,from+Math.round(dy/h)));
+    cards.forEach((c,k)=>{if(c===card)return;c.style.transform=(from<to&&k>from&&k<=to)?`translateY(${-h}px)`:(to<from&&k<from&&k>=to)?`translateY(${h}px)`:''});
+  };
+  let curY=y0,raf=0;
+  const auto=()=>{ // 목록 위·아래 끝에 가까우면 자동으로 스크롤
+    const r=L.getBoundingClientRect();
+    if(curY<r.top+50)L.scrollTop-=10;else if(curY>r.bottom-50)L.scrollTop+=10;
+    place();raf=requestAnimationFrame(auto);
+  };
+  raf=requestAnimationFrame(auto);
+  const move=ev=>{curY=ev.clientY;place()};
+  const end=()=>{
+    cancelAnimationFrame(raf);
+    card.removeEventListener('pointermove',move);card.removeEventListener('pointerup',end);card.removeEventListener('pointercancel',end);
+    if(to!==from){
+      const [m]=clips.splice(from,1);clips.splice(to,0,m);
+      if(cur===from)cur=to;else if(from<cur&&cur<=to)cur--;else if(to<=cur&&cur<from)cur++;
+      saveOrder();
+    }
+    renderList();
+  };
+  card.addEventListener('pointermove',move);card.addEventListener('pointerup',end);card.addEventListener('pointercancel',end);
+}
+/* 삭제: 확인창 없이 바로 지우고, 5초 동안 "되돌리기"를 보여 줌. 시간이 지나면 저장된 데이터까지 완전히 삭제 */
+let pendingDel=null;
+function commitDel(){
+  const p=pendingDel;if(!p)return;pendingDel=null;clearTimeout(p.t);$('#undo').classList.remove('show');
+  delClip(p.c.id);abuf.delete(p.c.id);URL.revokeObjectURL(p.c.url);
+}
+function deleteClip(i){
+  commitDel(); // 앞서 지운 것이 남아 있으면 먼저 확정
+  const [c]=clips.splice(i,1);
+  pendingDel={c,i,t:setTimeout(commitDel,5000)};
+  saveOrder();
+  $('#undo').classList.add('show');
+  if(clips.length)selectClip(Math.min(i,clips.length-1));else{cur=0;renderList();drawFrame(null,0)}
+}
+$('#undoBtn').onclick=async()=>{
+  const p=pendingDel;if(!p)return;pendingDel=null;clearTimeout(p.t);$('#undo').classList.remove('show');
+  clips.splice(Math.min(p.i,clips.length),0,p.c);saveOrder();
+  await selectClip(Math.min(p.i,clips.length-1));
+};
 async function addClip(blob,dur,thumb,kind,pcm){
   const c={id:Date.now()+'-'+Math.random().toString(36).slice(2,7),blob,url:URL.createObjectURL(blob),dur:dur||0,thumb:thumb||'',texts:[],kind:kind||'video',pcm:pcm||null};
   clips.push(c);
@@ -1041,6 +1093,7 @@ async function openSheet(i){
   $('#sheet').hidden=false;syncSheet();
   await withTimeout(ensureFonts(clips[i].texts),2000);redraw();saveClip(clips[i]);
 }
+$('#shDel').onclick=()=>{$('#sheet').hidden=true;if(playing)stopPlay();deleteClip(ei)};
 $('#shClose').onclick=()=>{$('#sheet').hidden=true;if(playing)stopPlay();selectClip(ei);saveClip(clips[ei]);renderList()};
 const bind=(id,key,conv=v=>v)=>$(id).addEventListener('input',e=>{const l=layer();if(!l)return;l[key]=conv(e.target.type==='checkbox'?e.target.checked:e.target.value);changed(key==='size'||key==='text')});
 bind('#fText','text');bind('#fSize','size',Number);bind('#fY','y',Number);bind('#fDelay','delay',Number);bind('#fSw','sw',Number);
