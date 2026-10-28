@@ -22,7 +22,12 @@ select{font:inherit;color:inherit;background:#fff;border:2px solid var(--line);b
 button.pri{background:linear-gradient(135deg,#ff9cc9,#ff6fa8);border-color:#ff6fa8;color:#fff;box-shadow:0 3px 0 #e0558e}
 button.pri:active{box-shadow:none}
 button:disabled{opacity:.4}
-#app{position:relative;z-index:1;height:100dvh;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
+#app{position:relative;z-index:1;height:100dvh;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);pointer-events:none}
+#app>*{pointer-events:auto}
+/* 영상은 화면 전체에 크게 깔고, 헤더와 아래 패널(클립 목록 등)이 그 위에 반투명으로 얹힘 */
+#dock{margin-top:auto;display:flex;flex-direction:column;max-height:52dvh;background:rgba(255,255,255,.84);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-radius:26px 26px 0 0;box-shadow:0 -6px 24px rgba(40,70,120,.25)}
+body.mini #trBar,body.mini #list,body.mini #actions,body.busy #trBar,body.busy #list,body.busy #actions{display:none} /* 재생 중이거나 접었을 때는 재생 막대만 남겨 영상을 가리지 않음 */
+#btnMini{width:44px;padding:8px 0;flex:none}
 #diag{position:fixed;inset:0;z-index:60;background:rgba(40,60,110,.9);display:flex;align-items:center;justify-content:center;padding:16px}
 #diag .box{background:#fff;color:var(--txt);border-radius:22px;padding:16px;max-width:520px;width:100%;max-height:82dvh;overflow:auto}
 #diag pre{white-space:pre-wrap;word-break:break-all;font-size:12px;line-height:1.5;margin:8px 0}
@@ -36,12 +41,17 @@ body.busy #actions,body.busy #exp{backdrop-filter:none!important;-webkit-backdro
 @keyframes bob{0%,100%{transform:translateY(0) rotate(-6deg)}50%{transform:translateY(-5px) rotate(6deg)}}
 @keyframes pop{0%{transform:scale(.7);opacity:0}70%{transform:scale(1.04)}100%{transform:scale(1);opacity:1}}
 @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
-header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px}
+header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:rgba(255,255,255,.72);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-radius:0 0 22px 22px}
 header h1{font-size:22px;margin:0;font-weight:400;background:linear-gradient(90deg,#ff6fa8,#6cc3ff);-webkit-background-clip:text;background-clip:text;color:transparent;display:flex;align-items:center;gap:6px;white-space:nowrap}
 header h1 span{display:inline-block;animation:bob 2.4s ease-in-out infinite}
-#stage{position:relative;flex:none;display:flex;flex-direction:column;align-items:center;gap:6px;padding:0 16px}
-#cv{height:40dvh;aspect-ratio:9/16;background:#000;border-radius:22px;max-width:100%;border:4px solid #fff;box-shadow:0 8px 24px rgba(90,150,210,.35)}
-#playbar{display:flex;align-items:center;gap:10px;width:100%;max-width:420px}
+#stage{position:relative;flex:none;display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 16px 6px}
+#snd{flex:none;width:44px;height:44px;padding:0;font-size:22px;border-radius:50%}
+#snd.on{background:var(--acc);color:#fff}
+#cv{position:fixed;z-index:0;left:50%;top:50%;transform:translate(-50%,-50%);width:min(100vw,calc(100dvh * 9 / 16));aspect-ratio:9/16;background:#000;touch-action:none}
+body{background:#000!important}
+/* 수정 화면이 열려 있으면 영상을 위쪽 빈 공간에 맞춰 줄여서 아래 글자도 가려지지 않게 함 */
+body.editing #cv{width:min(100vw,calc((48dvh - 64px) * 9 / 16));top:calc(64px + (48dvh - 64px) / 2)}
+#playbar{display:flex;align-items:center;gap:8px;width:100%;max-width:460px}
 #btnPlay{width:44px;padding:8px 0}
 #prog{flex:1;height:10px;background:#fff;border:2px solid var(--line);border-radius:999px;overflow:hidden}
 #prog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc2),var(--acc));border-radius:999px}
@@ -51,7 +61,7 @@ header h1 span{display:inline-block;animation:bob 2.4s ease-in-out infinite}
 #trBar .chips{flex:1;padding:4px 0}
 #trBar select{flex:none;font-size:14px;padding:5px 8px}
 #trBar .chips button{font-size:14px;padding:5px 12px}
-#list{flex:1;overflow:auto;padding:10px 16px;display:flex;flex-direction:column;gap:8px}
+#list{flex:1;min-height:0;overflow:auto;padding:10px 16px;display:flex;flex-direction:column;gap:8px}
 .empty{color:var(--sub);text-align:center;margin-top:24px;line-height:1.8;font-size:16px}
 .empty .big{display:block;font-size:44px;animation:bob 2.4s ease-in-out infinite}
 .card{display:flex;gap:10px;align-items:center;background:var(--panel);border:2px solid #fff;border-radius:22px;padding:8px;box-shadow:0 4px 14px rgba(90,150,210,.18)}
@@ -112,11 +122,12 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 </head>
 <body>
 <div id="bubbles"></div>
+<canvas id="cv" width="720" height="1280"></canvas>
 <div id="app">
   <header><h1><span>🫧</span>추억은방울방울</h1><div style="display:flex;gap:6px"><select id="qSel" title="내보내기 화질"><option value="1">720p</option><option value="1.5">1080p</option></select><button class="pri" id="btnExport">내보내기</button></div></header>
+  <div id="dock">
   <div id="stage">
-    <canvas id="cv" width="720" height="1280"></canvas>
-    <div id="playbar"><button id="btnPlay">▶</button><div id="prog"><i></i></div><span id="time">0:00 / 0:00</span></div>
+    <div id="playbar"><button id="btnPlay">▶</button><div id="prog"><i></i></div><span id="time">0:00 / 0:00</span><button id="snd" aria-pressed="false" title="소리 켜기/끄기">🔇</button><button id="btnMini" title="목록 접기/펼치기">⌄</button></div>
   </div>
   <div id="trBar"><span>✨ 전환</span><div class="chips" id="trChips"></div><select id="trSpeed" title="전환 속도"><option value="0.2">빠르게</option><option value="0.4">보통</option><option value="0.7">느리게</option></select></div>
   <div id="list"></div>
@@ -124,6 +135,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
     <button class="rec" id="btnRec">● 촬영</button>
     <label>📁 가져오기<input type="file" id="fImport" accept="video/*,image/*" multiple hidden></label>
     <label>📷 기본 카메라<input type="file" id="fNative" accept="video/*" capture="environment" hidden></label>
+  </div>
   </div>
 </div>
 
@@ -226,6 +238,16 @@ const newLayer=()=>({text:'텍스트',font:'Jua',size:80,color:'#ffffff',stroke:
 /* ---------- 상태 ---------- */
 let clips=[],cur=-1,playing=false,runToken=0,exporting=false;
 let actx=null,srcNode,dest,prevGain;
+/* 미리보기 소리 켜기/끄기 (기본은 꺼짐). 내보내기 영상에는 이 설정과 상관없이 항상 소리가 들어감 */
+let soundOn=false;
+function applyVol(){if(prevGain&&!exporting)prevGain.gain.value=soundOn?1:0}
+new MutationObserver(()=>document.body.classList.toggle('editing',!$('#sheet').hidden)).observe($('#sheet'),{attributes:true,attributeFilter:['hidden']});
+$('#btnMini').onclick=()=>{const m=document.body.classList.toggle('mini');$('#btnMini').textContent=m?'⌃':'⌄'};
+$('#snd').onclick=()=>{
+  initAudio();soundOn=!soundOn;applyVol();
+  const b=$('#snd');b.textContent=soundOn?'🔊':'🔇';b.classList.toggle('on',soundOn);b.setAttribute('aria-pressed',soundOn);
+  if(soundOn&&actx&&actx.state!=='running'){try{actx.resume()}catch(e){}}
+};
 
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>t.classList.remove('show'),2200)}
 function initAudio(){
@@ -233,7 +255,7 @@ function initAudio(){
     try{
       actx=new(window.AudioContext||window.webkitAudioContext)();
       dest=actx.createMediaStreamDestination();
-      prevGain=actx.createGain();prevGain.connect(actx.destination);
+      prevGain=actx.createGain();prevGain.connect(actx.destination);applyVol();
       // 두 영상 요소 모두 같은 오디오 경로로 연결 (내보내기에 소리가 들어가도록)
       vids.forEach(v=>{const s=actx.createMediaElementSource(v);s.connect(dest);s.connect(prevGain)});
     }catch(e){actx=null}
@@ -841,7 +863,7 @@ async function togglePlay(only){
   initAudio();
   if(playing){stopPlay();return}
   if(!clips.length)return;
-  if(prevGain)prevGain.gain.value=1;
+  applyVol();
   playing=true;setPlayUI();
   // ▶는 항상 처음부터 전체 재생 (편집하느라 마지막 클립이 선택된 상태에서 누르면 그 클립만 재생되던 문제)
   const r=await playRange(0,false);
@@ -853,7 +875,7 @@ async function togglePlay(only){
 async function playClipAt(i){
   initAudio();
   if(playing)stopPlay();
-  if(prevGain)prevGain.gain.value=1;
+  applyVol();
   cur=i;playing=true;setPlayUI();renderList();
   const r=await playRange(i,true);
   if(r==='cancel')return; // 다른 재생이 시작되었거나 중지됨
@@ -1185,7 +1207,7 @@ async function previewTransition(){
   if(clips.length<2){toast('클립이 2개 이상일 때 전환 효과가 보여요');return}
   const my=++previewSeq; // 효과 버튼을 연달아 눌러도 앞 미리보기의 뒷정리가 새 미리보기를 멈추지 않게
   if(playing)stopPlay();
-  initAudio();if(prevGain)prevGain.gain.value=1;
+  initAudio();applyVol();
   playing=true;setPlayUI();
   const startAt=Math.max(0,(clips[0].dur||1)-0.8); // 첫 클립 끝 0.8초 전부터
   let finished=false;
@@ -1207,7 +1229,7 @@ async function previewTransition(){
 $('#fPlay').onclick=()=>togglePlayOnce();
 async function togglePlayOnce(){
   if(playing){stopPlay()}
-  initAudio();if(prevGain)prevGain.gain.value=1;
+  initAudio();applyVol();
   playing=true;setPlayUI();
   // 미리보기는 이 텍스트가 표시되는 범위(여러 클립에 이어지면 그 끝까지)를 재생해서 이어지는 모습을 확인
   const l0=layer();
@@ -1261,9 +1283,8 @@ $('#btnExport').onclick=async()=>{
   mr.start(250);
   const ok=(await playRange(0))==='done';
   await new Promise(r=>{mr.onstop=r;mr.stop()});
-  if(prevGain)prevGain.gain.value=1;
   if(wake)try{wake.release()}catch(e){}
-  exporting=false;setPlayUI();
+  exporting=false;setPlayUI();applyVol();
   setRes(PREVIEW_S);redraw();
   if(!ok){$('#exp').hidden=true;toast('내보내기를 취소했어요');await selectClip(0);return}
   const type=mr.mimeType||mime||'video/webm',ext=type.includes('mp4')?'mp4':'webm';
