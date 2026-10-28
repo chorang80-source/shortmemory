@@ -61,7 +61,9 @@ header h1 span{display:inline-block;animation:bob 2.4s ease-in-out infinite}
 .meta b{display:block}
 .meta span{color:var(--sub);display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card{cursor:pointer;position:relative;transition:transform .15s}
-.grip{flex:none;width:44px;align-self:stretch;display:flex;align-items:center;justify-content:center;font-size:24px;color:var(--sub);touch-action:none;cursor:grab;border-radius:14px;user-select:none;-webkit-user-select:none}
+.btns{display:grid;grid-template-columns:repeat(2,36px);gap:4px}
+.btns button{padding:5px 0;font-size:14px;box-shadow:0 2px 0 var(--line)}
+.grip{flex:none;width:34px;align-self:stretch;display:flex;align-items:center;justify-content:center;font-size:24px;color:var(--sub);touch-action:none;cursor:grab;border-radius:14px;user-select:none;-webkit-user-select:none}
 .card.dragging{transition:none;z-index:5;box-shadow:0 10px 26px rgba(60,110,180,.4);opacity:.95}
 #undo{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom));transform:translate(-50%,20px);background:#334;color:#fff;border-radius:22px;padding:8px 8px 8px 16px;display:flex;gap:10px;align-items:center;opacity:0;pointer-events:none;transition:.2s;z-index:50;font-size:15px}
 #undo.show{opacity:1;transform:translate(-50%,0);pointer-events:auto}
@@ -866,9 +868,13 @@ function renderList(){
     const d=document.createElement('div');d.className='card'+(i===cur?' sel':'');
     d.innerHTML=`${c.thumb?`<img src="${c.thumb}">`:'<div class="noimg"></div>'}
       <div class="meta"><b>#${i+1} · ${c.dur?c.dur.toFixed(1)+'초':'?'}${c.kind==='image'?' · 🖼 사진':''}</b><span>${c.texts.length?c.texts.map(t=>t.text.replace(/\n/g,' ')+(t.toEnd?' ➜끝까지':((t.span||1)>1?' ➜'+t.span+'개':''))).join(' / '):'텍스트 없음'}</span></div>
+      <div class="btns"><button data-a="edit">✎</button><button data-a="del">🗑</button></div>
       <div class="grip" title="끌어서 순서 바꾸기">⠿</div>`;
     d.dataset.i=i;
-    d.onclick=e=>{if(!e.target.closest('.grip'))openSheet(i)}; // 카드를 누르면 바로 수정 화면
+    d.onclick=e=>{ // 카드 아무 곳이나 누르면 수정 화면, 🗑는 삭제(되돌리기 가능)
+      if(e.target.closest('.grip'))return;
+      if(e.target.closest('[data-a="del"]'))deleteClip(i);else openSheet(i);
+    };
     d.querySelector('.grip').addEventListener('pointerdown',e=>startReorder(e,d,i));
     L.appendChild(d);
   });
