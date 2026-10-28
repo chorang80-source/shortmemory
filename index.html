@@ -22,11 +22,12 @@ select{font:inherit;color:inherit;background:#fff;border:2px solid var(--line);b
 button.pri{background:linear-gradient(135deg,#ff9cc9,#ff6fa8);border-color:#ff6fa8;color:#fff;box-shadow:0 3px 0 #e0558e}
 button.pri:active{box-shadow:none}
 button:disabled{opacity:.4}
-#app{position:relative;z-index:1;height:100dvh;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);pointer-events:none}
-#app>*{pointer-events:auto}
-/* 영상은 화면 전체에 크게 깔고, 헤더와 아래 패널(클립 목록 등)이 그 위에 반투명으로 얹힘 */
-#dock{margin-top:auto;display:flex;flex-direction:column;max-height:52dvh;background:rgba(255,255,255,.84);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-radius:26px 26px 0 0;box-shadow:0 -6px 24px rgba(40,70,120,.25)}
-body.mini #trBar,body.mini #list,body.mini #actions,body.busy #trBar,body.busy #list,body.busy #actions{display:none} /* 재생 중이거나 접었을 때는 재생 막대만 남겨 영상을 가리지 않음 */
+#app{position:relative;z-index:1;height:100dvh;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);}
+/* 화면 위쪽 약 60%는 영상, 아래 40%는 클립 목록 패널 */
+#view{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:#000}
+#dock{flex:none;height:40dvh;display:flex;flex-direction:column;background:#eaf6ff;border-radius:26px 26px 0 0;box-shadow:0 -6px 24px rgba(40,70,120,.25)}
+body.mini #trBar,body.mini #list,body.mini #actions{display:none} /* 접으면 재생 막대만 남고 영상이 더 커짐 */
+body.mini #dock{height:auto}
 #btnMini{width:44px;padding:8px 0;flex:none}
 #diag{position:fixed;inset:0;z-index:60;background:rgba(40,60,110,.9);display:flex;align-items:center;justify-content:center;padding:16px}
 #diag .box{background:#fff;color:var(--txt);border-radius:22px;padding:16px;max-width:520px;width:100%;max-height:82dvh;overflow:auto}
@@ -41,16 +42,15 @@ body.busy #actions,body.busy #exp{backdrop-filter:none!important;-webkit-backdro
 @keyframes bob{0%,100%{transform:translateY(0) rotate(-6deg)}50%{transform:translateY(-5px) rotate(6deg)}}
 @keyframes pop{0%{transform:scale(.7);opacity:0}70%{transform:scale(1.04)}100%{transform:scale(1);opacity:1}}
 @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.06)}}
-header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:rgba(255,255,255,.72);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-radius:0 0 22px 22px}
+header{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:#eaf6ff}
 header h1{font-size:22px;margin:0;font-weight:400;background:linear-gradient(90deg,#ff6fa8,#6cc3ff);-webkit-background-clip:text;background-clip:text;color:transparent;display:flex;align-items:center;gap:6px;white-space:nowrap}
 header h1 span{display:inline-block;animation:bob 2.4s ease-in-out infinite}
 #stage{position:relative;flex:none;display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 16px 6px}
 #snd{flex:none;width:44px;height:44px;padding:0;font-size:22px;border-radius:50%}
 #snd.on{background:var(--acc);color:#fff}
-#cv{position:fixed;z-index:0;left:50%;top:50%;transform:translate(-50%,-50%);width:min(100vw,calc(100dvh * 9 / 16));aspect-ratio:9/16;background:#000;touch-action:none}
-body{background:#000!important}
-/* 수정 화면이 열려 있으면 영상을 위쪽 빈 공간에 맞춰 줄여서 아래 글자도 가려지지 않게 함 */
-body.editing #cv{width:min(100vw,calc((48dvh - 64px) * 9 / 16));top:calc(64px + (48dvh - 64px) / 2)}
+#cv{height:100%;max-width:100%;aspect-ratio:9/16;background:#000;touch-action:none}
+/* 수정 화면이 열려 있으면 패널을 키워 영상이 수정 패널에 가려지지 않게 함 */
+body.editing #dock{height:52dvh}
 #playbar{display:flex;align-items:center;gap:8px;width:100%;max-width:460px}
 #btnPlay{width:44px;padding:8px 0}
 #prog{flex:1;height:10px;background:#fff;border:2px solid var(--line);border-radius:999px;overflow:hidden}
@@ -122,9 +122,9 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 </head>
 <body>
 <div id="bubbles"></div>
-<canvas id="cv" width="720" height="1280"></canvas>
 <div id="app">
   <header><h1><span>🫧</span>추억은방울방울</h1><div style="display:flex;gap:6px"><select id="qSel" title="내보내기 화질"><option value="1">720p</option><option value="1.5">1080p</option></select><button class="pri" id="btnExport">내보내기</button></div></header>
+  <div id="view"><canvas id="cv" width="720" height="1280"></canvas></div>
   <div id="dock">
   <div id="stage">
     <div id="playbar"><button id="btnPlay">▶</button><div id="prog"><i></i></div><span id="time">0:00 / 0:00</span><button id="snd" aria-pressed="false" title="소리 켜기/끄기">🔇</button><button id="btnMini" title="목록 접기/펼치기">⌄</button></div>
