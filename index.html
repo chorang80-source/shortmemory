@@ -848,6 +848,17 @@ async function togglePlay(only){
   playing=false;setPlayUI();
   if(r==='done')await selectClip(0);
 }
+/* 목록에서 클립을 누르면 그 클립 하나만 재생 (재생 중이면 멈추고 눌린 클립부터 다시 재생) */
+async function playClipAt(i){
+  initAudio();
+  if(playing)stopPlay();
+  if(prevGain)prevGain.gain.value=1;
+  cur=i;playing=true;setPlayUI();renderList();
+  const r=await playRange(i,true);
+  if(r==='cancel')return; // 다른 재생이 시작되었거나 중지됨
+  playing=false;setPlayUI();
+  if(r==='done')await selectClip(i);
+}
 async function selectClip(i){
   if(playing)stopPlay();
   if(i<0||i>=clips.length){cur=-1;drawFrame(null,0);renderList();return}
@@ -871,9 +882,11 @@ function renderList(){
       <div class="btns"><button data-a="edit">✎</button><button data-a="del">🗑</button></div>
       <div class="grip" title="끌어서 순서 바꾸기">⠿</div>`;
     d.dataset.i=i;
-    d.onclick=e=>{ // 카드 아무 곳이나 누르면 수정 화면, 🗑는 삭제(되돌리기 가능)
+    d.onclick=e=>{ // 카드를 누르면 그 클립 재생, ✎는 수정, 🗑는 삭제(되돌리기 가능)
       if(e.target.closest('.grip'))return;
-      if(e.target.closest('[data-a="del"]'))deleteClip(i);else openSheet(i);
+      if(e.target.closest('[data-a="del"]'))deleteClip(i);
+      else if(e.target.closest('[data-a="edit"]'))openSheet(i);
+      else playClipAt(i);
     };
     d.querySelector('.grip').addEventListener('pointerdown',e=>startReorder(e,d,i));
     L.appendChild(d);
