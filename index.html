@@ -988,8 +988,12 @@ function deleteClip(i){
 /* 목록 창 높이 조절: 위쪽 손잡이를 위아래로 끌면 영상 화면과 목록의 비율이 바뀜 (값은 기억해 둠) */
 (function(){
   const dock=$('#dock'),grip=$('#dockGrip'),root=document.documentElement;
-  const clamp=h=>Math.max(150,Math.min(h,innerHeight-220));
+  // 최소 높이 = 목록을 뺀 나머지(재생 막대·구역·하단 버튼)가 다 들어가는 높이 + 목록 약간 → 아래 버튼이 잘리지 않음
+  const minH=()=>[...dock.children].filter(c=>c.id!=='list'&&c.offsetParent!==null).reduce((s,c)=>s+c.offsetHeight+6,0)+70;
+  const clamp=h=>Math.max(minH(),Math.min(h,innerHeight-220));
   try{const v=parseFloat(localStorage.getItem('dockH'));if(v>0)root.style.setProperty('--dockH',clamp(v)+'px')}catch(e){}
+  const refit=()=>{if(root.style.getPropertyValue('--dockH'))root.style.setProperty('--dockH',clamp(dock.getBoundingClientRect().height)+'px')};
+  addEventListener('resize',refit);addEventListener('load',()=>setTimeout(refit,300));
   grip.addEventListener('pointerdown',e=>{
     e.preventDefault();
     const y0=e.clientY,h0=dock.getBoundingClientRect().height;let h=h0;
