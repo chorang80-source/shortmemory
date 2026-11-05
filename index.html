@@ -1087,7 +1087,7 @@ function buildLenChips(){
 async function startStream(){
   stopStream();
   // 해상도/비율을 강제하지 않고 카메라가 지원하는 최대치를 요청 → 카메라 앱과 같은 해상도
-  camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facing,width:{ideal:4096},height:{ideal:4096},frameRate:{ideal:30}},audio:true});
+  camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facing,width:{ideal:1920},height:{ideal:1920},frameRate:{ideal:30}},audio:true});
   $('#camVid').srcObject=camStream;
   $('#camVid').style.transform=facing==='user'?'scaleX(-1)':'';
 }
@@ -1112,7 +1112,11 @@ function snapCam(){
 function startRec(){
   recChunks=[];recThumb='';
   const m=pickMime();
-  try{rec=new MediaRecorder(camStream,m?{mimeType:m}:{})}catch(e){toast('녹화를 시작할 수 없어요');return}
+  // 기본 녹화 비트레이트는 매우 낮아(약 2.5Mbps) 화질이 흐려짐 → 해상도에 맞춰 높게 지정 (1080p 기준 약 9Mbps)
+  const vs=camStream.getVideoTracks()[0],st=vs?vs.getSettings():{};
+  const vbps=Math.round(Math.min(20e6,Math.max(5e6,(st.width||1080)*(st.height||1920)*(st.frameRate||30)*0.15)));
+  try{rec=new MediaRecorder(camStream,m?{mimeType:m,videoBitsPerSecond:vbps,audioBitsPerSecond:128000}:{videoBitsPerSecond:vbps,audioBitsPerSecond:128000})}
+  catch(e){try{rec=new MediaRecorder(camStream,m?{mimeType:m}:{})}catch(e2){toast('녹화를 시작할 수 없어요');return}}
   rec.ondataavailable=e=>{if(e.data&&e.data.size)recChunks.push(e.data)};
   rec.onstop=async()=>{
     const dur=(performance.now()-recT0)/1000;
