@@ -45,7 +45,6 @@ body.big #dock{flex:1;min-height:0;height:auto;border-radius:0}
 body.big header{display:none}
 body.big .card img,body.big .card .noimg{width:63px;height:112px}
 body.big #list{padding:10px 16px 16px}
-#btnMini{width:44px;padding:8px 0;flex:none}
 #diag{position:fixed;inset:0;z-index:60;background:rgba(40,60,110,.9);display:flex;align-items:center;justify-content:center;padding:16px}
 #diag .box{background:#fff;color:var(--txt);border-radius:22px;padding:16px;max-width:520px;width:100%;max-height:82dvh;overflow:auto}
 #diag pre{white-space:pre-wrap;word-break:break-all;font-size:12px;line-height:1.5;margin:8px 0}
@@ -148,7 +147,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
   <div id="dock">
   <div id="dockGrip" title="위아래로 끌어 목록 크기 조절"><i></i></div>
   <div id="stage">
-    <div id="playbar"><button id="btnPlay">▶</button><div id="prog"><i></i></div><span id="time">0:00 / 0:00</span><button id="snd" aria-pressed="false" title="소리 켜기/끄기">🔇</button><button id="btnMini" title="목록 접기/펼치기">⌄</button></div>
+    <div id="playbar"><button id="btnPlay">▶</button><div id="prog"><i></i></div><span id="time">0:00 / 0:00</span><button id="snd" aria-pressed="false" title="소리 켜기/끄기">🔇</button></div>
   </div>
   <div id="listBar"><span id="lcount">🎞 클립 0개</span><div class="tools"><button id="btnBig" title="목록 전체화면으로 크게 보기">⛶ 크게 보기</button><button id="btnClear" title="모든 영상 지우기">🧹 전체 초기화</button></div></div>
   <div id="trBar"><span>✨ 전환</span><select id="trSpeed" title="전환 속도"><option value="0.2">빠르게</option><option value="0.4">보통</option><option value="0.7">느리게</option></select><div class="chips" id="trChips"></div></div>
@@ -263,7 +262,6 @@ let actx=null,srcNode,dest,prevGain;
 let soundOn=false;
 function applyVol(){if(prevGain&&!exporting)prevGain.gain.value=soundOn?1:0}
 new MutationObserver(()=>document.body.classList.toggle('editing',!$('#sheet').hidden)).observe($('#sheet'),{attributes:true,attributeFilter:['hidden']});
-$('#btnMini').onclick=()=>{const m=document.body.classList.toggle('mini');$('#btnMini').textContent=m?'⌃':'⌄'};
 $('#snd').onclick=()=>{
   initAudio();soundOn=!soundOn;applyVol();
   const b=$('#snd');b.textContent=soundOn?'🔊':'🔇';b.classList.toggle('on',soundOn);b.setAttribute('aria-pressed',soundOn);
