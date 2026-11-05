@@ -31,8 +31,11 @@ body.mini #dockGrip,body.big #dockGrip{display:none}
 #dock{flex:none;height:var(--dockH,40dvh);display:flex;flex-direction:column;background:#eaf6ff;border-radius:26px 26px 0 0;box-shadow:0 -6px 24px rgba(40,70,120,.25)}
 body.mini #trBar,body.mini #list,body.mini #actions{display:none} /* 접으면 재생 막대만 남고 영상이 더 커짐 */
 body.mini #dock{height:auto}
-#listBar{flex:none;display:flex;align-items:center;gap:6px;padding:4px 16px 0;color:var(--sub);font-size:14px}
-#listBar #lcount{flex:1}
+/* 구역 나누기: 클립 목록 구역 / 전환 구역을 각각 흰 카드로 묶음 */
+#listBar,#trBar{margin:4px 12px 0!important;padding:7px 10px!important;background:rgba(255,255,255,.75);border:2px solid #fff;border-radius:18px;box-shadow:0 2px 8px rgba(90,150,210,.15)}
+#listBar{flex:none;display:flex;align-items:center;gap:6px;color:var(--sub);font-size:14px}
+#listBar #lcount{flex:1;color:var(--txt);font-size:15px;font-weight:700}
+#listBar .tools{display:flex;gap:6px;padding-left:8px;border-left:2px solid var(--line)}
 #listBar button{font-size:13px;padding:5px 10px;white-space:nowrap}
 #btnClear{color:#d33}
 body.mini #listBar{display:none}
@@ -140,14 +143,14 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 <body>
 <div id="bubbles"></div>
 <div id="app">
-  <header><h1><span>🫧</span>추억은방울방울</h1><div style="display:flex;gap:6px"><select id="qSel" title="내보내기 화질"><option value="1">720p</option><option value="1.5">1080p</option></select><button class="pri" id="btnExport">내보내기</button></div></header>
+  <header><h1><span><svg width="30" height="30" viewBox="0 0 32 32" aria-hidden="true" style="display:block"><defs><radialGradient id="bbG" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="#fff"/><stop offset=".45" stop-color="#d6f0ff"/><stop offset="1" stop-color="#7cc8ff"/></radialGradient></defs><circle cx="16" cy="16" r="13.5" fill="url(#bbG)" stroke="#6cc3ff" stroke-width="2"/><ellipse cx="11" cy="10.5" rx="4" ry="2.4" transform="rotate(-35 11 10.5)" fill="#fff" opacity=".95"/><circle cx="21.5" cy="21.5" r="1.8" fill="#fff" opacity=".8"/></svg></span>추억은방울방울</h1><div style="display:flex;gap:6px"><select id="qSel" title="내보내기 화질"><option value="1">720p</option><option value="1.5">1080p</option></select><button class="pri" id="btnExport">내보내기</button></div></header>
   <div id="view"><canvas id="cv" width="720" height="1280"></canvas></div>
   <div id="dock">
   <div id="dockGrip" title="위아래로 끌어 목록 크기 조절"><i></i></div>
   <div id="stage">
     <div id="playbar"><button id="btnPlay">▶</button><div id="prog"><i></i></div><span id="time">0:00 / 0:00</span><button id="snd" aria-pressed="false" title="소리 켜기/끄기">🔇</button><button id="btnMini" title="목록 접기/펼치기">⌄</button></div>
   </div>
-  <div id="listBar"><span id="lcount"></span><button id="btnBig" title="목록 전체화면으로 크게 보기">⛶ 크게 보기</button><button id="btnClear" title="모든 영상 지우기">🧹 전체 초기화</button></div>
+  <div id="listBar"><span id="lcount">🎞 클립 0개</span><div class="tools"><button id="btnBig" title="목록 전체화면으로 크게 보기">⛶ 크게 보기</button><button id="btnClear" title="모든 영상 지우기">🧹 전체 초기화</button></div></div>
   <div id="trBar"><span>✨ 전환</span><select id="trSpeed" title="전환 속도"><option value="0.2">빠르게</option><option value="0.4">보통</option><option value="0.7">느리게</option></select><div class="chips" id="trChips"></div></div>
   <div id="list"></div>
   <div id="actions">
@@ -914,7 +917,7 @@ async function selectClip(i){
 /* ---------- 클립 목록 ---------- */
 function renderList(){
   const L=$('#list');
-  $('#lcount').textContent=clips.length?`클립 ${clips.length}개`:'';
+  $('#lcount').textContent=`🎞 클립 ${clips.length}개`;
   $('#btnClear').disabled=!clips.length;
   if(!clips.length){L.innerHTML='<div class="empty"><span class="big">🫧</span>아직 방울이 없어요<br>아래 <b>● 촬영</b>으로 2~5초씩 담거나<br>📁 가져오기로 영상을 추가해 보세요</div>';return}
   L.innerHTML='';
