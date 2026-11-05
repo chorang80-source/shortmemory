@@ -25,7 +25,10 @@ button:disabled{opacity:.4}
 #app{position:relative;z-index:1;height:100dvh;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);}
 /* 화면 위쪽 약 60%는 영상, 아래 40%는 클립 목록 패널 */
 #view{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:#000}
-#dock{flex:none;height:40dvh;display:flex;flex-direction:column;background:#eaf6ff;border-radius:26px 26px 0 0;box-shadow:0 -6px 24px rgba(40,70,120,.25)}
+#dockGrip{flex:none;height:22px;display:flex;align-items:center;justify-content:center;touch-action:none;cursor:ns-resize;user-select:none;-webkit-user-select:none}
+#dockGrip i{display:block;width:48px;height:5px;border-radius:999px;background:#b5cfe6}
+body.mini #dockGrip,body.big #dockGrip{display:none}
+#dock{flex:none;height:var(--dockH,40dvh);display:flex;flex-direction:column;background:#eaf6ff;border-radius:26px 26px 0 0;box-shadow:0 -6px 24px rgba(40,70,120,.25)}
 body.mini #trBar,body.mini #list,body.mini #actions{display:none} /* 접으면 재생 막대만 남고 영상이 더 커짐 */
 body.mini #dock{height:auto}
 #listBar{flex:none;display:flex;align-items:center;gap:6px;padding:4px 16px 0;color:var(--sub);font-size:14px}
@@ -137,11 +140,12 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
   <header><h1><span>🫧</span>추억은방울방울</h1><div style="display:flex;gap:6px"><select id="qSel" title="내보내기 화질"><option value="1">720p</option><option value="1.5">1080p</option></select><button class="pri" id="btnExport">내보내기</button></div></header>
   <div id="view"><canvas id="cv" width="720" height="1280"></canvas></div>
   <div id="dock">
+  <div id="dockGrip" title="위아래로 끌어 목록 크기 조절"><i></i></div>
   <div id="stage">
     <div id="playbar"><button id="btnPlay">▶</button><div id="prog"><i></i></div><span id="time">0:00 / 0:00</span><button id="snd" aria-pressed="false" title="소리 켜기/끄기">🔇</button><button id="btnMini" title="목록 접기/펼치기">⌄</button></div>
   </div>
-  <div id="trBar"><span>✨ 전환</span><div class="chips" id="trChips"></div><select id="trSpeed" title="전환 속도"><option value="0.2">빠르게</option><option value="0.4">보통</option><option value="0.7">느리게</option></select></div>
   <div id="listBar"><span id="lcount"></span><button id="btnBig" title="목록 전체화면으로 크게 보기">⛶ 크게 보기</button><button id="btnClear" title="모든 영상 지우기">🧹 전체 초기화</button></div>
+  <div id="trBar"><span>✨ 전환</span><div class="chips" id="trChips"></div><select id="trSpeed" title="전환 속도"><option value="0.2">빠르게</option><option value="0.4">보통</option><option value="0.7">느리게</option></select></div>
   <div id="list"></div>
   <div id="actions">
     <button class="rec" id="btnRec">● 촬영</button>
@@ -506,7 +510,7 @@ function drawFrame(clip,t,settled){
   const isImg=!!clip&&clip.kind==='image',src=isImg?img:vid;
   const vw=isImg?img.naturalWidth:vid.videoWidth,vh=isImg?img.naturalHeight:vid.videoHeight;
   const k=clip?clips.indexOf(clip):-1;
-  if(vw&&vh){
+  if(clip&&vw&&vh){ // 클립이 없으면(전체 삭제 등) 이전 영상이 남아 보이지 않게 검은 화면만 그림
     let s=Math.max(W/vw,H/vh);
     if(isImg&&!settled&&clip.dur>0)s*=1+0.08*Math.min(1,t/clip.dur); // 사진은 천천히 확대
     const tr=transitionOf(clip,k,t,settled);
@@ -975,6 +979,23 @@ function deleteClip(i){
   $('#undo').classList.add('show');
   if(clips.length)selectClip(Math.min(i,clips.length-1));else{cur=0;renderList();drawFrame(null,0)}
 }
+/* 목록 창 높이 조절: 위쪽 손잡이를 위아래로 끌면 영상 화면과 목록의 비율이 바뀜 (값은 기억해 둠) */
+(function(){
+  const dock=$('#dock'),grip=$('#dockGrip'),root=document.documentElement;
+  const clamp=h=>Math.max(150,Math.min(h,innerHeight-220));
+  try{const v=parseFloat(localStorage.getItem('dockH'));if(v>0)root.style.setProperty('--dockH',clamp(v)+'px')}catch(e){}
+  grip.addEventListener('pointerdown',e=>{
+    e.preventDefault();
+    const y0=e.clientY,h0=dock.getBoundingClientRect().height;let h=h0;
+    try{grip.setPointerCapture(e.pointerId)}catch(_){}
+    const move=ev=>{h=clamp(h0-(ev.clientY-y0));root.style.setProperty('--dockH',h+'px')};
+    const end=()=>{
+      grip.removeEventListener('pointermove',move);grip.removeEventListener('pointerup',end);grip.removeEventListener('pointercancel',end);
+      try{localStorage.setItem('dockH',String(Math.round(h)))}catch(_){}
+    };
+    grip.addEventListener('pointermove',move);grip.addEventListener('pointerup',end);grip.addEventListener('pointercancel',end);
+  });
+})();
 /* 목록 크게 보기(전체화면) 켜기/끄기 */
 function setBig(on){
   document.body.classList.toggle('big',on);
