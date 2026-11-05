@@ -47,7 +47,9 @@ body.big #list{padding:10px 16px 16px}
 #diag .box{background:#fff;color:var(--txt);border-radius:22px;padding:16px;max-width:520px;width:100%;max-height:82dvh;overflow:auto}
 #diag pre{white-space:pre-wrap;word-break:break-all;font-size:12px;line-height:1.5;margin:8px 0}
 /* 재생·내보내기 중: 배경 애니메이션과 흐림 효과를 꺼서 영상 재생·그리기가 끊기지 않게 함 */
-body.busy #bubbles{display:none}
+body.busy #bubbles,body.camOn #bubbles{display:none}
+body.camOn *{animation:none!important} /* 촬영 중에는 배경 애니메이션을 꺼서 프레임이 끊기지 않게 */
+body.camOn #app{visibility:hidden}
 body.busy *{animation:none!important}
 body.busy #actions,body.busy #exp{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
 #bubbles{position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0}
@@ -1088,6 +1090,14 @@ async function startStream(){
   stopStream();
   // 해상도/비율을 강제하지 않고 카메라가 지원하는 최대치를 요청 → 카메라 앱과 같은 해상도
   camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facing,width:{ideal:1920},height:{ideal:1920},frameRate:{ideal:30}},audio:true});
+  // 지원하는 기기에서만 적용되는 손떨림 보정 요청 (지원하지 않으면 무시됨)
+  try{
+    const vt=camStream.getVideoTracks()[0],caps=vt.getCapabilities?vt.getCapabilities():{};
+    if(caps.videoStabilizationMode){
+      const modes=caps.videoStabilizationMode,pick=['cinematic','cinematic-extended','standard','auto','on'].find(x=>modes.includes(x));
+      if(pick)await vt.applyConstraints({advanced:[{videoStabilizationMode:pick}]});
+    }
+  }catch(e){}
   $('#camVid').srcObject=camStream;
   $('#camVid').style.transform=facing==='user'?'scaleX(-1)':'';
 }
@@ -1097,9 +1107,9 @@ $('#btnRec').onclick=async()=>{
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){toast('이 환경에서는 앱 내 촬영이 안 돼요. 📷 기본 카메라를 써 주세요');return}
   try{await startStream()}catch(e){toast('카메라 권한을 허용해 주세요 (https 필요)');return}
   if(playing)stopPlay();
-  shot=0;$('#camCount').textContent='0개';buildLenChips();$('#cam').hidden=false;
+  shot=0;$('#camCount').textContent='0개';buildLenChips();$('#cam').hidden=false;document.body.classList.add('camOn');
 };
-$('#camClose').onclick=()=>{if(rec)stopRec();stopStream();$('#cam').hidden=true;selectClip(clips.length-1)};
+$('#camClose').onclick=()=>{if(rec)stopRec();stopStream();$('#cam').hidden=true;document.body.classList.remove('camOn');selectClip(clips.length-1)};
 $('#camFlip').onclick=async()=>{if(rec)return;facing=facing==='user'?'environment':'user';try{await startStream()}catch(e){toast('전환 실패')}};
 $('#recBtn').onclick=()=>rec?stopRec():startRec();
 function snapCam(){
