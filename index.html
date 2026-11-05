@@ -28,6 +28,17 @@ button:disabled{opacity:.4}
 #dock{flex:none;height:40dvh;display:flex;flex-direction:column;background:#eaf6ff;border-radius:26px 26px 0 0;box-shadow:0 -6px 24px rgba(40,70,120,.25)}
 body.mini #trBar,body.mini #list,body.mini #actions{display:none} /* 접으면 재생 막대만 남고 영상이 더 커짐 */
 body.mini #dock{height:auto}
+#listBar{flex:none;display:flex;align-items:center;gap:6px;padding:4px 16px 0;color:var(--sub);font-size:14px}
+#listBar #lcount{flex:1}
+#listBar button{font-size:13px;padding:5px 10px;white-space:nowrap}
+#btnClear{color:#d33}
+body.mini #listBar{display:none}
+/* 목록 크게 보기: 영상 화면을 숨기고 목록을 전체 화면으로 */
+body.big #view,body.big #stage,body.big #header-dummy{display:none}
+body.big #dock{flex:1;min-height:0;height:auto;border-radius:0}
+body.big header{display:none}
+body.big .card img,body.big .card .noimg{width:63px;height:112px}
+body.big #list{padding:10px 16px 16px}
 #btnMini{width:44px;padding:8px 0;flex:none}
 #diag{position:fixed;inset:0;z-index:60;background:rgba(40,60,110,.9);display:flex;align-items:center;justify-content:center;padding:16px}
 #diag .box{background:#fff;color:var(--txt);border-radius:22px;padding:16px;max-width:520px;width:100%;max-height:82dvh;overflow:auto}
@@ -130,6 +141,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
     <div id="playbar"><button id="btnPlay">▶</button><div id="prog"><i></i></div><span id="time">0:00 / 0:00</span><button id="snd" aria-pressed="false" title="소리 켜기/끄기">🔇</button><button id="btnMini" title="목록 접기/펼치기">⌄</button></div>
   </div>
   <div id="trBar"><span>✨ 전환</span><div class="chips" id="trChips"></div><select id="trSpeed" title="전환 속도"><option value="0.2">빠르게</option><option value="0.4">보통</option><option value="0.7">느리게</option></select></div>
+  <div id="listBar"><span id="lcount"></span><button id="btnBig" title="목록 전체화면으로 크게 보기">⛶ 크게 보기</button><button id="btnClear" title="모든 영상 지우기">🧹 전체 초기화</button></div>
   <div id="list"></div>
   <div id="actions">
     <button class="rec" id="btnRec">● 촬영</button>
@@ -895,6 +907,8 @@ async function selectClip(i){
 /* ---------- 클립 목록 ---------- */
 function renderList(){
   const L=$('#list');
+  $('#lcount').textContent=clips.length?`클립 ${clips.length}개`:'';
+  $('#btnClear').disabled=!clips.length;
   if(!clips.length){L.innerHTML='<div class="empty"><span class="big">🫧</span>아직 방울이 없어요<br>아래 <b>● 촬영</b>으로 2~5초씩 담거나<br>📁 가져오기로 영상을 추가해 보세요</div>';return}
   L.innerHTML='';
   clips.forEach((c,i)=>{
@@ -907,8 +921,8 @@ function renderList(){
     d.onclick=e=>{ // 카드를 누르면 그 클립 재생, ✎는 수정, 🗑는 삭제(되돌리기 가능)
       if(e.target.closest('.grip'))return;
       if(e.target.closest('[data-a="del"]'))deleteClip(i);
-      else if(e.target.closest('[data-a="edit"]'))openSheet(i);
-      else playClipAt(i);
+      else if(e.target.closest('[data-a="edit"]')){setBig(false);openSheet(i)}
+      else{setBig(false);playClipAt(i)} // 크게 보기 중이면 영상 화면이 보이도록 먼저 닫음
     };
     d.querySelector('.grip').addEventListener('pointerdown',e=>startReorder(e,d,i));
     L.appendChild(d);
@@ -961,6 +975,26 @@ function deleteClip(i){
   $('#undo').classList.add('show');
   if(clips.length)selectClip(Math.min(i,clips.length-1));else{cur=0;renderList();drawFrame(null,0)}
 }
+/* 목록 크게 보기(전체화면) 켜기/끄기 */
+function setBig(on){
+  document.body.classList.toggle('big',on);
+  $('#btnBig').textContent=on?'⤡ 영상 보기':'⛶ 크게 보기';
+}
+$('#btnBig').onclick=()=>setBig(!document.body.classList.contains('big'));
+/* 전체 초기화: 모든 클립과 저장된 데이터를 지움 (되돌릴 수 없어 확인창을 띄움) */
+$('#btnClear').onclick=async()=>{
+  if(!clips.length)return;
+  if(!confirm(`클립 ${clips.length}개를 모두 지울까요?\n지운 영상은 되돌릴 수 없어요.`))return;
+  if(playing)stopPlay();
+  commitDel();
+  const all=clips.splice(0,clips.length);
+  all.forEach(c=>{abuf.delete(c.id);try{URL.revokeObjectURL(c.url)}catch(_){}});
+  cur=0;
+  await dbTx(['clips','cmeta','meta'],tx=>{tx.objectStore('clips').clear();tx.objectStore('cmeta').clear();tx.objectStore('meta').clear()});
+  setBig(false);
+  renderList();drawFrame(null,0);
+  toast('모두 초기화했어요');
+};
 $('#undoBtn').onclick=async()=>{
   const p=pendingDel;if(!p)return;pendingDel=null;clearTimeout(p.t);$('#undo').classList.remove('show');
   clips.splice(Math.min(p.i,clips.length),0,p.c);saveOrder();
