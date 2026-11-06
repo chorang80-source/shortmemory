@@ -754,6 +754,9 @@ const diag={transitions:[]}; // 진단: 가장 최근 재생에서 클립 사이
 let prevEndAt=0; // 앞 클립이 끝난 시각 (다음 클립이 실제로 움직이기까지 걸린 시간을 재기 위함)
 function startPreroll(idx){
   const v=spare;
+  // 미리 준비해 두려고 잠깐 틀었다 멈춘 영상은 이미 조금 진행되어 있을 수 있음 → 처음부터 재생되게 되감음 (안 하면 그만큼 앞부분이 건너뛰어져 클립이 너무 빨리 끝남).
+  // 아주 조금(0.12초 이하) 진행된 것은 되감지 않음: 아이폰은 되감기가 느려서 준비해 둔 상태가 사라지기 때문
+  if(v.currentTime>0.12){try{v.currentTime=0}catch(e){}}
   preP0=performance.now();preStartT=v.currentTime;preMeasured=false;
   prerolledIdx=idx;v.muted=elMuted(clips[idx]);
   const undo=()=>{prerolledIdx=-1;stopClipAudio(idx)};
