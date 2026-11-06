@@ -975,6 +975,8 @@ async function selectClip(i){
   drawFrame(clips[i],0,true);
   updateProgress(i,0,true);
   renderList();
+  // 클립을 고르는 순간 다음 클립을 미리 준비해 둠: ▶를 처음 누를 때 다음 영상이 아직 준비되지 않아 전환이 빠지는 것을 줄임 (여러 번 재생하면 되던 것과 같은 상태)
+  if(!useSingle&&i+1<clips.length&&!playing&&!exporting)preloadNext(i+1);
 }
 
 /* ---------- 클립 목록 ---------- */
