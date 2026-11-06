@@ -865,6 +865,11 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
     });
     if(!isImg)diag.transitions.push({clip:i+1,방식:i===from?'첫 클립':(inT>0?'겹침':'이어붙임'),최장멈춤ms:Math.round(maxStill),넘어가는데ms:gapMs}); // 진단 기록
     prevEndAt=performance.now();
+    // 겹쳐 재생하지 못하고 이어붙이는 경우(느린 기기 등): 끝나기 직전 장면 저장을 놓쳤더라도 지금 화면을 저장해서 전환이 빠지지 않게 함
+    if(trKind!=='none'&&!inT&&i<last&&snapFor!==i&&token===runToken){
+      if(snap.width!==cv.width||snap.height!==cv.height){snap.width=cv.width;snap.height=cv.height}
+      snapCtx.drawImage(cv,0,0);snapFor=i;
+    }
     stopClipAudio(i); // 이 클립의 소리는 클립이 끝나면 함께 끝냄 (미리 출발한 다음 클립의 소리는 그대로)
     if(retry&&token===runToken){i--;continue} // 같은 클립을 단일 모드로 다시
     // 다음 클립은 이 클립이 실제로 끝난 시각에서 이어서 시작 (이어 표시되는 텍스트의 효과 시간이 끊기지 않게)
