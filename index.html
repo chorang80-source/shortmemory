@@ -1424,6 +1424,7 @@ $('#btnExport').onclick=async()=>{
   expUI('방울방울 영상을 만드는 중이에요… 🫧<br><small>끝날 때까지 화면을 켜 두고 이 앱을 보고 있어 주세요.<br>(재생 시간만큼 걸려요)</small>',true,[['취소',()=>{runToken++;vid.pause()}]]);
   let wake=null;try{wake=await navigator.wakeLock.request('screen')}catch(e){}
   const q=parseFloat($('#qSel').value)||1;
+  await selectClip(0); // 시작 화면을 첫 클립으로 맞춤 (안 하면 마지막에 보던 클립 화면이 영상 맨 앞에 잠깐 녹화됨)
   setRes(q);redraw();
   const stream=cv.captureStream(30);
   if(dest)dest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
