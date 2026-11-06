@@ -25,6 +25,21 @@ button:disabled{opacity:.4}
 #app{position:relative;z-index:1;height:100dvh;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);}
 /* 화면 위쪽 약 60%는 영상, 아래 40%는 클립 목록 패널 */
 #view{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:#000}
+/* 세로가 짧은 화면(아이폰 SE 등): 여백을 줄여 영상 영역과 목록이 더 보이게 함 */
+@media (max-height:740px){
+  header{padding:4px 12px}
+  header h1{font-size:19px}
+  header select,header button{padding-top:5px;padding-bottom:5px;font-size:15px}
+  #snd{width:38px;height:38px;font-size:19px}
+  #btnPlay{width:38px;padding:5px 0}
+  #stage{padding:2px 12px 2px}
+  #listBar,#trBar{margin:3px 8px 0!important;padding:4px 8px!important}
+  #listBar button,#trBar .chips button,#trBar select{padding-top:3px;padding-bottom:3px}
+  #actions{padding:6px 12px calc(6px + env(safe-area-inset-bottom))}
+  #actions button,#actions label{padding:9px 4px}
+  #dockGrip{height:16px}
+}
+#fitChips button.on{background:var(--acc);border-color:var(--acc);color:#fff}
 #dockGrip{flex:none;height:22px;display:flex;align-items:center;justify-content:center;touch-action:none;cursor:ns-resize;user-select:none;-webkit-user-select:none}
 #dockGrip i{display:block;width:48px;height:5px;border-radius:999px;background:#b5cfe6}
 body.mini #dockGrip,body.big #dockGrip{display:none}
@@ -174,6 +189,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 <div id="sheet" hidden>
   <div class="sh-head"><b id="shTitle"></b><span><button id="fDel" title="선택한 텍스트 삭제">🗑 텍스트 삭제</button><button class="pri" id="shClose">완료</button></span></div>
   <div class="row" id="imgRow" hidden><label style="display:block;width:100%">🖼 사진 보여주는 시간 <b id="imgDurVal"></b><input type="range" id="fImgDur" min="1" max="10" step="0.5"></label></div>
+  <div class="row" id="fitRow"><span style="color:var(--sub)">🖼 화면 맞춤</span><div class="chips" id="fitChips"><button data-fit="cover">꽉 채우기</button><button data-fit="contain">전체 보이기</button></div></div>
   <div class="row" id="tabs"></div>
   <div class="lbl">💡 위쪽 영상 화면에서 글자를 손가락으로 끌어 옮길 수 있어요</div>
   <textarea id="fText" rows="2" placeholder="자막 내용 (줄바꿈 가능)"></textarea>
@@ -212,6 +228,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 <script>
 'use strict';
 const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); // 사용자가 입력한 글자를 HTML에 넣을 때 깨지지 않게 변환
 const W=720,H=1280;
 const cv=$('#cv'),ctx=cv.getContext('2d',{alpha:false}); // 투명도가 필요 없으므로 끄면 그리기가 빨라짐
 // 영상 요소 2개를 번갈아 사용: 재생 중인 vid, 다음 클립을 미리 불러두는 spare
@@ -233,10 +250,14 @@ function enterSingle(why,persist=false){ // 재생 중 감지한 경우는 이�
 const img=new Image(); // 사진 클립용
 const PREVIEW_S=0.75; // 미리보기는 화면에 보이는 크기에 맞춰 540x960으로 그림 (내보내기는 고른 화질 720p/1080p 그대로)
 let S=PREVIEW_S; // 해상도 배율 (논리 좌표는 항상 720x1280)
+/* 화면 맞춤: 'cover'=화면을 꽉 채움(넘치는 부분은 잘림, 기본), 'contain'=영상 전체가 보임(남는 곳은 검은색) */
+const fitScale=(c,vw,vh)=>c&&c.fit==='contain'?Math.min(W/vw,H/vh):Math.max(W/vw,H/vh);
 function setRes(s){S=s;cv.width=Math.round(W*s);cv.height=Math.round(H*s)}
 setRes(PREVIEW_S);
 try{const q=localStorage.getItem('q');if(q)$('#qSel').value=q}catch(e){}
-$('#qSel').onchange=e=>{try{localStorage.setItem('q',e.target.value)}catch(_){}};
+$('#qSel').onchange=e=>{
+  try{localStorage.setItem('q',e.target.value)}catch(_){}
+};
 
 /* ---------- 글꼴 / 효과 ---------- */
 const FONTS=[
@@ -268,7 +289,7 @@ $('#snd').onclick=()=>{
   if(soundOn&&actx&&actx.state!=='running'){try{actx.resume()}catch(e){}}
 };
 
-function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>t.classList.remove('show'),2200)}
+function toast(m,ms=2200){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>t.classList.remove('show'),ms)}
 function initAudio(){
   if(!actx){
     try{
@@ -415,15 +436,39 @@ const dbp=new Promise((ok,no)=>{
     r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error);
   }catch(e){no(e)}
 });
+/* 저장에 실패하면(저장 공간 부족, 사생활 보호 모드 등) 조용히 넘어가지 않고 알려 줌. 같은 알림이 계속 뜨지 않게 15초에 한 번만 */
+let dbWarnAt=0;
+function dbFail(e){
+  console.error('저장 실패:',e);
+  if(Date.now()-dbWarnAt<15000)return;dbWarnAt=Date.now();
+  toast('⚠️ 저장에 실패했어요. 기기 저장 공간이 부족하거나 브라우저가 저장을 막고 있어요. 이대로 앱을 닫으면 영상이 사라질 수 있어요',6000);
+}
 async function dbTx(store,fn){
   try{
     const db=await dbp;
-    return await new Promise((res,rej)=>{const tx=db.transaction(store,'readwrite');const out=fn(tx);tx.oncomplete=()=>res(out&&out.result);tx.onerror=()=>rej(tx.error)});
-  }catch(e){}
+    return await new Promise((res,rej)=>{
+      const tx=db.transaction(store,'readwrite');const out=fn(tx);
+      tx.oncomplete=()=>res(out&&out.result);
+      tx.onerror=()=>rej(tx.error);
+      tx.onabort=()=>rej(tx.error||new Error('저장이 중단됨')); // 저장 공간 초과(QuotaExceededError)는 보통 여기로 옴
+    });
+  }catch(e){dbFail(e)}
 }
+/* 브라우저가 공간이 모자랄 때 저장된 영상을 마음대로 지우지 못하게 "영구 저장"을 요청. 아이폰 Safari는 홈 화면에 추가하지 않으면 오래 안 쓴 사이트의 데이터를 지울 수 있음 */
+(async()=>{
+  try{
+    if(!navigator.storage||!navigator.storage.persist)return;
+    const ok=(await navigator.storage.persisted())||(await navigator.storage.persist());
+    const standalone=navigator.standalone||(window.matchMedia&&matchMedia('(display-mode: standalone)').matches);
+    if(!ok&&!standalone&&isIOS&&!localStorage.getItem('persistHint')){
+      localStorage.setItem('persistHint','1');
+      setTimeout(()=>toast('💡 공유 버튼 → "홈 화면에 추가"를 하면 영상이 더 안전하게 보관돼요',6000),4000);
+    }
+  }catch(e){}
+})();
 // 영상·사진 파일(큰 데이터)은 클립을 추가할 때 한 번만 저장하고, 텍스트 편집은 가벼운 정보만 저장 (휴대폰에서 매번 파일을 다시 쓰면 느려지고 멈출 수 있음)
-const saveBlob=c=>dbTx('clips',tx=>tx.objectStore('clips').put({id:c.id,blob:c.blob,dur:c.dur,thumb:c.thumb,texts:c.texts,kind:c.kind||'video',pcm:c.pcm||null}));
-const saveClip=c=>dbTx('cmeta',tx=>tx.objectStore('cmeta').put({id:c.id,texts:c.texts,dur:c.dur}));
+const saveBlob=c=>dbTx('clips',tx=>tx.objectStore('clips').put({id:c.id,blob:c.blob,dur:c.dur,thumb:c.thumb,texts:c.texts,kind:c.kind||'video',pcm:c.pcm||null,fit:c.fit||'cover'}));
+const saveClip=c=>dbTx('cmeta',tx=>tx.objectStore('cmeta').put({id:c.id,texts:c.texts,dur:c.dur,fit:c.fit||'cover'}));
 const saveOrder=()=>dbTx('meta',tx=>tx.objectStore('meta').put(clips.map(c=>c.id),'order'));
 const delClip=id=>dbTx(['clips','cmeta'],tx=>{tx.objectStore('clips').delete(id);tx.objectStore('cmeta').delete(id)});
 let st;const saveSoon=c=>{clearTimeout(st);st=setTimeout(()=>saveClip(c),500)};
@@ -436,9 +481,13 @@ async function loadAll(){
       const r=await get('clips',id);
       if(!r)continue;
       const m=await get('cmeta',id); // 있으면 가장 최근 텍스트·길이로 덮어씀 (이전 버전 데이터와도 호환)
-      clips.push({...r,...(m?{texts:m.texts,dur:m.dur}:{}),url:URL.createObjectURL(r.blob)});
+      clips.push({...r,...(m?{texts:m.texts,dur:m.dur,fit:m.fit||r.fit||'cover'}:{}),url:URL.createObjectURL(r.blob)});
       if(r.pcm){const pb=bufFromPcm(r.pcm);if(pb)abuf.set(r.id,pb)} // 저장해 둔 녹음 소리 복원
     }
+    // 삭제 직후(되돌리기 시간 안에) 앱을 닫아 목록에서만 빠지고 파일은 남은 클립을 정리 → 저장 공간 낭비 방지
+    const keys=await new Promise(r=>{const q=db.transaction('clips').objectStore('clips').getAllKeys();q.onsuccess=()=>r(q.result||[]);q.onerror=()=>r([])});
+    const keep=new Set(order);
+    for(const k of keys)if(!keep.has(k))delClip(k);
   }catch(e){}
 }
 
@@ -515,7 +564,7 @@ function drawFrame(clip,t,settled){
   const vw=isImg?img.naturalWidth:vid.videoWidth,vh=isImg?img.naturalHeight:vid.videoHeight;
   const k=clip?clips.indexOf(clip):-1;
   if(clip&&vw&&vh){ // 클립이 없으면(전체 삭제 등) 이전 영상이 남아 보이지 않게 검은 화면만 그림
-    let s=Math.max(W/vw,H/vh);
+    let s=fitScale(clip,vw,vh);
     if(isImg&&!settled&&clip.dur>0)s*=1+0.08*Math.min(1,t/clip.dur); // 사진은 천천히 확대
     const tr=transitionOf(clip,k,t,settled);
     if(tr)drawWithTransition(src,vw,vh,s,tr);
@@ -599,7 +648,7 @@ function drawOverlapFrame(i,t,tIn,mov){ // mov: 다음 영상이 출발한 뒤 �
   if(!va.videoWidth||!vb.videoWidth)return false; // 아직 그릴 수 없으면 일반 그리기로
   ctx.setTransform(S,0,0,S,0,0);
   ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
-  const sa=Math.max(W/va.videoWidth,H/va.videoHeight),sb=Math.max(W/vb.videoWidth,H/vb.videoHeight);
+  const sa=fitScale(A,va.videoWidth,va.videoHeight),sb=fitScale(B,vb.videoWidth,vb.videoHeight);
   const under=()=>{const dw=va.videoWidth*sa,dh=va.videoHeight*sa;ctx.drawImage(va,(W-dw)/2,(H-dh)/2,dw,dh)};
   drawWithTransition(vb,vb.videoWidth,vb.videoHeight,sb,{p:Math.min(1,Math.max(0,(mov===undefined?tIn:mov)/overlapLen()))},under);
   // 텍스트: 앞 클립에서 이어지는 것은 그대로, 다음 클립에서 새로 시작하는 것은 다음 클립 시간으로
@@ -927,7 +976,7 @@ function renderList(){
   clips.forEach((c,i)=>{
     const d=document.createElement('div');d.className='card'+(i===cur?' sel':'')+(c.isNew?' new':'');c.isNew=false;
     d.innerHTML=`${c.thumb?`<img src="${c.thumb}">`:'<div class="noimg"></div>'}
-      <div class="meta"><b>#${i+1} · ${c.dur?c.dur.toFixed(1)+'초':'?'}${c.kind==='image'?' · 🖼 사진':''}</b><span>${c.texts.length?c.texts.map(t=>t.text.replace(/\n/g,' ')+(t.toEnd?' ➜끝까지':((t.span||1)>1?' ➜'+t.span+'개':''))).join(' / '):'텍스트 없음'}</span></div>
+      <div class="meta"><b>#${i+1} · ${c.dur?c.dur.toFixed(1)+'초':'?'}${c.kind==='image'?' · 🖼 사진':''}</b><span>${c.texts.length?c.texts.map(t=>esc(t.text.replace(/\n/g,' '))+(t.toEnd?' ➜끝까지':((t.span||1)>1?' ➜'+t.span+'개':''))).join(' / '):'텍스트 없음'}</span></div>
       <div class="btns"><button data-a="edit">✎</button><button data-a="del">🗑</button></div>
       <div class="grip" title="끌어서 순서 바꾸기">⠿</div>`;
     d.dataset.i=i;
@@ -980,11 +1029,20 @@ function commitDel(){
   const p=pendingDel;if(!p)return;pendingDel=null;clearTimeout(p.t);$('#undo').classList.remove('show');
   delClip(p.c.id);abuf.delete(p.c.id);URL.revokeObjectURL(p.c.url);
 }
+/* 전체 초기화도 같은 방식: 목록에서만 먼저 치우고 8초 동안 "되돌리기"를 보여 준 뒤, 시간이 지나면 저장된 데이터까지 완전히 삭제 */
+let pendingClr=null;
+function commitClr(){
+  const p=pendingClr;if(!p)return;pendingClr=null;clearTimeout(p.t);$('#undo').classList.remove('show');
+  p.list.forEach(c=>{delClip(c.id);abuf.delete(c.id);try{URL.revokeObjectURL(c.url)}catch(_){}}); // 그 사이 새로 추가한 클립은 건드리지 않도록 id로 하나씩 삭제
+}
+addEventListener('pagehide',()=>{commitDel();commitClr()});
 function deleteClip(i){
   commitDel(); // 앞서 지운 것이 남아 있으면 먼저 확정
+  commitClr();
   const [c]=clips.splice(i,1);
   pendingDel={c,i,t:setTimeout(commitDel,5000)};
   saveOrder();
+  $('#undo span').textContent='클립을 삭제했어요';
   $('#undo').classList.add('show');
   if(clips.length)selectClip(Math.min(i,clips.length-1));else{cur=0;renderList();drawFrame(null,0)}
 }
@@ -992,8 +1050,12 @@ function deleteClip(i){
 (function(){
   const dock=$('#dock'),grip=$('#dockGrip'),root=document.documentElement;
   // 최소 높이 = 목록을 뺀 나머지(재생 막대·구역·하단 버튼)가 다 들어가는 높이 + 목록 약간 → 아래 버튼이 잘리지 않음
-  const minH=()=>[...dock.children].filter(c=>c.id!=='list'&&c.offsetParent!==null).reduce((s,c)=>s+c.offsetHeight+6,0)+70;
+  const minH=()=>[...dock.children].filter(c=>c.id!=='list'&&c.offsetParent!==null).reduce((s,c)=>s+c.offsetHeight+6,0)+80;
   const clamp=h=>Math.max(minH(),Math.min(h,innerHeight-220));
+  // 기본 높이(40%)일 때도 내용이 화면 아래로 잘리지 않게 항상 최소 높이를 보장 (내용 크기가 바뀌면 다시 계산)
+  const fit=()=>{dock.style.minHeight=minH()+'px'};
+  addEventListener('resize',fit);addEventListener('load',fit);fit();
+  if(window.ResizeObserver){const ro=new ResizeObserver(fit);[...dock.children].forEach(c=>{if(c.id!=='list')ro.observe(c)})}
   try{const v=parseFloat(localStorage.getItem('dockH'));if(v>0)root.style.setProperty('--dockH',clamp(v)+'px')}catch(e){}
   const refit=()=>{if(root.style.getPropertyValue('--dockH'))root.style.setProperty('--dockH',clamp(dock.getBoundingClientRect().height)+'px')};
   addEventListener('resize',refit);addEventListener('load',()=>setTimeout(refit,300));
@@ -1015,21 +1077,27 @@ function setBig(on){
   $('#btnBig').textContent=on?'⤡ 영상 보기':'⛶ 크게 보기';
 }
 $('#btnBig').onclick=()=>setBig(!document.body.classList.contains('big'));
-/* 전체 초기화: 모든 클립과 저장된 데이터를 지움 (되돌릴 수 없어 확인창을 띄움) */
-$('#btnClear').onclick=async()=>{
+/* 전체 초기화: 확인창 → 목록을 비우고 8초 동안 되돌리기 가능 */
+$('#btnClear').onclick=()=>{
   if(!clips.length)return;
-  if(!confirm(`클립 ${clips.length}개를 모두 지울까요?\n지운 영상은 되돌릴 수 없어요.`))return;
+  if(!confirm(`클립 ${clips.length}개를 모두 지울까요?`))return;
   if(playing)stopPlay();
-  commitDel();
-  const all=clips.splice(0,clips.length);
-  all.forEach(c=>{abuf.delete(c.id);try{URL.revokeObjectURL(c.url)}catch(_){}});
-  cur=0;
-  await dbTx(['clips','cmeta','meta'],tx=>{tx.objectStore('clips').clear();tx.objectStore('cmeta').clear();tx.objectStore('meta').clear()});
-  setBig(false);
+  commitDel();commitClr(); // 앞서 지운 것이 남아 있으면 먼저 확정
+  const list=clips.splice(0,clips.length);
+  pendingClr={list,t:setTimeout(commitClr,8000)};
+  cur=0;saveOrder();setBig(false);
+  $('#undo span').textContent=`클립 ${list.length}개를 모두 지웠어요`;
+  $('#undo').classList.add('show');
   renderList();drawFrame(null,0);
-  toast('모두 초기화했어요');
 };
 $('#undoBtn').onclick=async()=>{
+  const c=pendingClr;
+  if(c){ // 전체 초기화 되돌리기: 원래 순서대로 맨 앞에 복원 (그 사이 새로 추가한 클립은 뒤에 그대로)
+    pendingClr=null;clearTimeout(c.t);$('#undo').classList.remove('show');
+    clips.unshift(...c.list);saveOrder();
+    await selectClip(0);toast('되돌렸어요');
+    return;
+  }
   const p=pendingDel;if(!p)return;pendingDel=null;clearTimeout(p.t);$('#undo').classList.remove('show');
   clips.splice(Math.min(p.i,clips.length),0,p.c);saveOrder();
   await selectClip(Math.min(p.i,clips.length-1));
@@ -1177,6 +1245,7 @@ function syncSheet(){
   const isImg=c.kind==='image';
   $('#imgRow').hidden=!isImg;
   if(isImg){$('#fImgDur').value=c.dur;$('#imgDurVal').textContent=c.dur+'초'}
+  document.querySelectorAll('#fitChips button').forEach(b=>b.classList.toggle('on',b.dataset.fit===(c.fit||'cover')));
   const tabs=$('#tabs');tabs.innerHTML='';
   c.texts.forEach((_,k)=>{const b=document.createElement('button');b.textContent='T'+(k+1);if(k===li)b.className='pri';b.onclick=()=>{li=k;syncSheet()};tabs.appendChild(b)});
   const add=document.createElement('button');add.textContent='＋ 텍스트 추가';add.onclick=()=>{const n=newLayer();if(c.texts.length)n.y=Math.max(10,c.texts[c.texts.length-1].y-15);c.texts.push(n);li=c.texts.length-1;syncSheet();changed(true)};tabs.appendChild(add);
@@ -1219,6 +1288,12 @@ $('#shClose').onclick=()=>{$('#sheet').hidden=true;if(playing)stopPlay();selectC
 const bind=(id,key,conv=v=>v)=>$(id).addEventListener('input',e=>{const l=layer();if(!l)return;l[key]=conv(e.target.type==='checkbox'?e.target.checked:e.target.value);changed(key==='size'||key==='text')});
 bind('#fText','text');bind('#fSize','size',Number);bind('#fY','y',Number);bind('#fDelay','delay',Number);bind('#fSw','sw',Number);
 bind('#fColor','color');bind('#fStroke','stroke');bind('#fBox','box');
+document.querySelectorAll('#fitChips button').forEach(b=>b.onclick=()=>{
+  const c=clips[ei];if(!c)return;
+  c.fit=b.dataset.fit;
+  document.querySelectorAll('#fitChips button').forEach(x=>x.classList.toggle('on',x===b));
+  redraw();saveSoon(c);
+});
 $('#fImgDur').addEventListener('input',e=>{
   const c=clips[ei];if(!c)return;
   c.dur=parseFloat(e.target.value);$('#imgDurVal').textContent=c.dur+'초';
