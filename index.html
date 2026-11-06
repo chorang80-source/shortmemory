@@ -605,11 +605,20 @@ function maybeSnapshot(clip,k,t,settled){
   snapCtx.drawImage(cv,0,0);snapFor=k;
 }
 /* 전환 구간이면 {p:0~1} 아니면 null. 앞 클립의 마지막 장면이 없으면(처음 재생 등) 전환 없이 바로 넘어감 */
+/* 전환의 진행 정도는 영상 시간(t)이 아니라 "이 클립의 첫 화면이 그려진 뒤 흐른 실제 시간"으로 계산.
+   영상 시간으로 계산하면, 첫 실행이나 1080p처럼 영상이 늦게 시작해서 첫 화면이 그려질 때 이미 t가 전환 길이를 넘어 있으면 전환이 통째로 건너뛰어짐 */
+let trBegin={k:-1,at:0}; // 이 클립(k)의 전환이 시작된 실제 시각
 function transitionOf(clip,k,t,settled){
   if(settled||trKind==='none'||k<=0||snapFor!==k-1)return null;
   const len=trLen(clip);
-  if(len<=0.05||t>=len)return null;
-  return {p:Math.max(0,t/len)};
+  if(len<=0.05)return null;
+  const now=performance.now();
+  if(trBegin.k!==k){
+    if(t>=len+0.6){trBegin={k,at:-1e12};return null} // 첫 화면이 그려질 때 이미 한참 지났으면(겹쳐 재생으로 넘어온 경우 등) 전환 없음
+    trBegin={k,at:now};
+  }
+  const p=(now-trBegin.at)/1000/len;
+  return p>=1?null:{p:Math.max(0,p)};
 }
 function drawWithTransition(src,vw,vh,s,tr,under){
   const e=tr.p*tr.p*(3-2*tr.p); // 부드럽게 시작하고 끝나는 곡선
@@ -796,6 +805,7 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
   if(token!==runToken)return 'cancel';
   for(let i=from;i<=last;i++){
     if(token!==runToken)return 'cancel';
+    trBegin={k:-1,at:0}; // 클립이 시작될 때마다 전환 시작 시각을 새로 잡음 (같은 클립을 다시 재생해도 전환이 나옴)
     await loadClip(i,true); // 미리 불러둔 영상이면 즉시 교대, 아니면 불러오기만 시작하고 바로 재생을 요청
     vid.muted=elMuted(clips[i]); // 소리는 따로 해독한 오디오로 재생하므로 영상은 음소거
     if(token!==runToken)return 'cancel';
@@ -919,6 +929,7 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
       if(snap.width!==cv.width||snap.height!==cv.height){snap.width=cv.width;snap.height=cv.height}
       snapCtx.drawImage(cv,0,0);snapFor=i;
     }
+    if(inT>0)snapFor=-1; // 이미 겹쳐서 섞였으면 다음 클립에서 전환을 또 하지 않음
     stopClipAudio(i); // 이 클립의 소리는 클립이 끝나면 함께 끝냄 (미리 출발한 다음 클립의 소리는 그대로)
     if(retry&&token===runToken){i--;continue} // 같은 클립을 단일 모드로 다시
     // 다음 클립은 이 클립이 실제로 끝난 시각에서 이어서 시작 (이어 표시되는 텍스트의 효과 시간이 끊기지 않게)
