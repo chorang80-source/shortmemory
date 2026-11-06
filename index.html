@@ -701,7 +701,9 @@ function loadClip(i,fast){ // fast: 영상이 다 불러와질 때까지 기다�
     return new Promise(res=>{img.onload=img.onerror=()=>res();img.src=c0.url;setTimeout(res,3000)});
   }
   // 미리 불러둔 영상이 있으면 요소를 맞바꿔 바로 사용 (끊김 없는 전환)
-  if(!useSingle&&spareIdx===i&&spare.readyState>=2){
+  // 아직 다 불러오지 못했어도(fast: 재생 중 넘어가는 경우) 미리 불러오던 요소를 그대로 사용: 현재 요소에 처음부터 다시 불러오는 것보다 훨씬 빨리 시작됨.
+  // (1080p에서는 다시 불러오는 데 오래 걸려 "멈춤"으로 오해되어 클립이 처음부터 다시 재생되던 원인)
+  if(!useSingle&&spareIdx===i&&(spare.readyState>=2||fast)){
     const old=vid;vid=spare;spare=old;spareIdx=-1;cur=i;old.pause();
     return Promise.resolve();
   }
@@ -908,8 +910,9 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
             if(pre&&O===0&&movedIn()>0.02&&end-t<=0.04){finish();return}
             const now=performance.now();
             if(t!==lastT){lastT=t;lastAdv=now}
-            else if(vid!==vids[0]&&!useSingle&&now-lastAdv>1200){
-              // 두 번째 영상 요소가 시작하지 못함 → 단일 요소 모드로 바꾸고 이 클립을 처음부터 다시 재생
+            else if(vid!==vids[0]&&!useSingle&&now-lastAdv>(exporting?6000:(vid.readyState>=2?1200:4000))){
+              // 두 번째 영상 요소가 시작하지 못함 → 단일 요소 모드로 바꾸고 이 클립을 처음부터 다시 재생.
+              // 아직 불러오는 중이면(readyState<2) 더 기다림. 내보내기 중에는 되돌아가 다시 재생하면 같은 장면이 영상에 두 번 기록되므로 오래 기다림
               retry=true;finish();enterSingle('두 번째 영상 요소가 재생되지 않음');return;
             }
             else if(now-lastAdv>3000){ // 3초 동안 시간이 안 흐르면 재시도 → 그래도 멈추면 다음 클립으로
@@ -925,7 +928,7 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
       };
       step(gen);
     });
-    if(!isImg)diag.transitions.push({clip:i+1,방식:i===last?'마지막 클립':(blendOk?'겹침':(inT>0?'겹침 못 그려서 이어붙임':'이어붙임')),최장멈춤ms:Math.round(maxStill),넘어가는데ms:gapMs}); // 진단 기록
+    if(!isImg)diag.transitions.push({clip:i+1,방식:(i===last?'마지막 클립':(blendOk?'겹침':(inT>0?'겹침 못 그려서 이어붙임':'이어붙임')))+(retry?' (멈춰서 이 클립을 다시 재생함)':''),최장멈춤ms:Math.round(maxStill),넘어가는데ms:gapMs}); // 진단 기록
     prevEndAt=performance.now();
     // 겹쳐 재생하지 못하고 이어붙이는 경우(느린 기기 등): 끝나기 직전 장면 저장을 놓쳤더라도 지금 화면을 저장해서 전환이 빠지지 않게 함
     if(trKind!=='none'&&!blendOk&&i<last&&snapFor!==i&&token===runToken){
@@ -1470,7 +1473,7 @@ $('#btnExport').onclick=async()=>{
   ]);
   const r=$('#expRes');r.hidden=false;r.innerHTML=`<video src="${url}" controls playsinline preload="metadata"></video>`;
   // 결과 확인용 한 줄: 녹화한 시간 / 파일에 기록된 영상 길이 / 크기 / 전환 방식 (영상이 짧거나 전환이 빠졌을 때 원인을 찾는 데 사용)
-  const modes=diag.transitions.slice(0,-1).map(x=>`${x.clip}→${x.clip+1} ${x.방식}`).join(' · ')||'-';
+  const modes=diag.transitions.filter(x=>!x.방식.startsWith('마지막 클립')).map(x=>`${x.clip}→${x.clip+1} ${x.방식}`).join(' · ')||'-';
   // 화면이 초당 몇 번 그려졌는지(평균)와 가장 오래 멈춘 시간. 평균이 낮으면(예: 15 미만) 전환(0.4초)에 그려지는 프레임이 너무 적어 전환이 빠진 것처럼 보임
   let gMax=0;for(let k=1;k<expT.length;k++)gMax=Math.max(gMax,expT[k]-expT[k-1]);
   const fpsTxt=expT.length>1?` · 그리기 평균 ${(expT.length/recSec).toFixed(0)}fps(최대 멈춤 ${Math.round(gMax)}ms)`:'';
@@ -1496,7 +1499,7 @@ function diagText(){
   L.push('가장 최근 재생(클립별):');
   if(!diag.transitions.length)L.push('  아직 재생 기록이 없어요. 재생한 뒤 다시 열어 주세요.');
   // 방식은 "이 클립이 끝나고 다음 클립으로 넘어갈 때"의 방식 (겹침 = 두 영상을 섞어서 전환, 이어붙임 = 앞 장면을 얼렸다가 서서히 바꿈)
-  diag.transitions.forEach(x=>L.push(`  클립 ${x.clip}${x.방식==='마지막 클립'?' (마지막)':`→${x.clip+1}: ${x.방식}`}${x.넘어가는데ms>=0?`, 이 클립은 앞 클립이 끝난 뒤 ${x.넘어가는데ms}ms 만에 움직임`:''}, 두 영상이 함께 멈춘 최장 ${x.최장멈춤ms}ms`));
+  diag.transitions.forEach(x=>L.push(`  클립 ${x.clip}${x.방식.startsWith('마지막 클립')?' (마지막)'+(x.방식.includes('다시')?' — 멈춰서 다시 재생함':''):`→${x.clip+1}: ${x.방식}`}${x.넘어가는데ms>=0?`, 이 클립은 앞 클립이 끝난 뒤 ${x.넘어가는데ms}ms 만에 움직임`:''}, 두 영상이 함께 멈춘 최장 ${x.최장멈춤ms}ms`));
   return L.join('\n');
 }
 (()=>{
