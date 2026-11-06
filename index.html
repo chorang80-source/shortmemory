@@ -846,8 +846,11 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
       const tStart=performance.now()-((i===from&&startAt>0)?startAt*1000:0); // 사진 클립은 시계로 길이를 잼
       const O=overlapLen(); // 다음 클립과 겹쳐 재생하는 시간
       const movedIn=()=>spare.currentTime-preStartT; // 미리 출발한 다음 영상이 실제로 움직인 시간(초). 출발 위치를 빼서 계산
+      // 섞이는 정도는 "섞기를 시작한 뒤 실제로 흐른 시간"으로 계산 (두 번째 영상의 재생 위치가 한꺼번에 튀어도 전환이 한 프레임에 끝나 사라지지 않게)
+      let blendT0=0; // 섞은 화면을 처음 그린 시각
+      const blendDone=()=>blendT0>0&&performance.now()-blendT0>=O*1000;
       // 다음 클립이 앞 클립과 함께 움직이며 섞이는 중인지
-      const blending=()=>pre&&O>0&&!useSingle&&movedIn()>0.02&&movedIn()<O*0.98;
+      const blending=()=>pre&&O>0&&!useSingle&&blendT0>0&&performance.now()-blendT0<O*980;
       // 앞 클립이 끝났어도 섞이는 중이면 섞기가 끝날 때까지 기다림 (최대 0.6초)
       const mayFinish=()=>!blending()||(endedAt>0&&performance.now()-endedAt>=600);
       const onEnded=()=>{if(!endedAt)endedAt=performance.now();if(mayFinish())finish()};
@@ -883,8 +886,12 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
           if(lagP0&&t-((i===from)?startAt:0)>0.03){lagSamples.push(nowT-lagP0);if(lagSamples.length>4)lagSamples.shift();lagP0=0}
           // 다음 클립이 이미 움직이고 있으면 두 영상을 함께 그려서 섞음, 아니면 이 클립만 그림
           const tIn=spare.currentTime;
-          if(pre&&O>0&&!useSingle&&!isImg&&spareIdx===i+1&&movedIn()>0.02&&drawOverlapFrame(i,t,tIn,movedIn())){inT=tIn;blendOk=true}
-          else if(isImg||vid.readyState>=2)drawFrame(clips[i],t); // 새 영상의 첫 화면이 준비되기 전에는 다시 그리지 않음 (검은 화면이 번쩍이지 않게 앞 화면을 유지)
+          let drew=false;
+          if(pre&&O>0&&!useSingle&&!isImg&&spareIdx===i+1&&movedIn()>0.02){
+            const pB=blendT0>0?Math.min(1,(nowT-blendT0)/1000/O):0; // 0→1, 실제 흐른 시간 기준
+            if(drawOverlapFrame(i,t,tIn,pB*O)){if(!blendT0)blendT0=nowT;inT=tIn;blendOk=true;drew=true}
+          }
+          if(!drew&&(isImg||vid.readyState>=2))drawFrame(clips[i],t); // 새 영상의 첫 화면이 준비되기 전에는 다시 그리지 않음 (검은 화면이 번쩍이지 않게 앞 화면을 유지)
           updateProgress(i,t);
           if(isImg){
             if(t>=clips[i].dur){finish();return}
@@ -905,7 +912,7 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
               else if(!preTimer&&isFinite(remain)){preTimer=setTimeout(()=>{preTimer=null;if(!tryPre())preTimer=null},Math.max(0,remain*1000-5))}
             }
             // 섞기가 끝났으면 바로 다음 클립으로 (앞 클립의 'ended' 신호는 늦게 올 수 있어서 기다리지 않음)
-            if(pre&&O>0&&!useSingle&&movedIn()>=O){inT=spare.currentTime;finish();return}
+            if(pre&&O>0&&!useSingle&&(blendDone()||(blendT0===0&&movedIn()>=O))){inT=spare.currentTime;finish();return}
             // 겹치지 않는 설정(전환 없음)이면: 다음 영상이 움직이고 이 클립이 거의 끝났을 때 바로 넘어감
             if(pre&&O===0&&movedIn()>0.02&&end-t<=0.04){finish();return}
             const now=performance.now();
