@@ -1359,7 +1359,9 @@ $('#btnExport').onclick=async()=>{
   try{mr=new MediaRecorder(stream,mime?{mimeType:mime,videoBitsPerSecond:bps}:{videoBitsPerSecond:bps})}catch(e){mr=new MediaRecorder(stream)}
   mr.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
   mr.start(250);
+  const recT0=performance.now();
   const ok=(await playRange(0))==='done';
+  const recSec=(performance.now()-recT0)/1000;
   await new Promise(r=>{mr.onstop=r;mr.stop()});
   if(wake)try{wake.release()}catch(e){}
   exporting=false;setPlayUI();applyVol();
@@ -1373,7 +1375,13 @@ $('#btnExport').onclick=async()=>{
     ['📤 공유',async()=>{try{if(navigator.canShare&&navigator.canShare({files:[file]}))await navigator.share({files:[file]});else toast('저장 버튼을 써 주세요')}catch(e){}}],
     ['닫기',()=>{$('#exp').hidden=true;URL.revokeObjectURL(url);selectClip(0)}]
   ]);
-  const r=$('#expRes');r.hidden=false;r.innerHTML=`<video src="${url}" controls playsinline></video>`;
+  const r=$('#expRes');r.hidden=false;r.innerHTML=`<video src="${url}" controls playsinline preload="metadata"></video>`;
+  // 결과 확인용 한 줄: 녹화한 시간 / 파일에 기록된 영상 길이 / 크기 / 전환 방식 (영상이 짧거나 전환이 빠졌을 때 원인을 찾는 데 사용)
+  const modes=diag.transitions.map(x=>x.방식).slice(1).join('·')||'-';
+  const note=document.createElement('div');note.style.cssText='font-size:12px;opacity:.85;margin-top:6px;line-height:1.5';
+  const show=d=>{note.textContent=`녹화 ${recSec.toFixed(1)}초 · 파일 영상 길이 ${isFinite(d)?d.toFixed(1)+'초':'알 수 없음'} · ${(blob.size/1048576).toFixed(1)}MB · ${type.split(';')[0]} · 전환 ${modes}`};
+  show(NaN);r.appendChild(note);
+  const rv=r.querySelector('video');rv.addEventListener('loadedmetadata',()=>show(rv.duration));
 };
 
 /* ---------- 재생 진단 ----------
