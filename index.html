@@ -613,10 +613,7 @@ function transitionOf(clip,k,t,settled){
   const len=trLen(clip);
   if(len<=0.05)return null;
   const now=performance.now();
-  if(trBegin.k!==k){
-    if(t>=len+0.6){trBegin={k,at:-1e12};return null} // 첫 화면이 그려질 때 이미 한참 지났으면(겹쳐 재생으로 넘어온 경우 등) 전환 없음
-    trBegin={k,at:now};
-  }
+  if(trBegin.k!==k)trBegin={k,at:now}; // 이 클립의 첫 화면이 그려진 순간부터 시작 (영상이 늦게 시작하거나 미리 출발해 있었어도 항상 전환이 나옴)
   const p=(now-trBegin.at)/1000/len;
   return p>=1?null:{p:Math.max(0,p)};
 }
@@ -651,7 +648,11 @@ function drawWithTransition(src,vw,vh,s,tr,under){
 
 /* 겹쳐 재생: 앞 클립(i)이 끝나기 전에 다음 클립(i+1)도 재생을 시작해서 두 영상이 함께 움직이며 섞임.
    섞이는 정도(p)는 다음 클립이 재생된 시간(tIn)으로 정하므로 두 영상의 시작 시각이 조금 어긋나도 어긋나지 않음. */
-const overlapLen=()=>trKind==='none'?0:TR_LEN; // 겹치는 시간(초). 전환 효과가 '없음'이면 겹치지 않고 바로 이어짐
+/* 두 영상을 동시에 재생하며 섞는 방식(LIVE_BLEND)은 기기·시점에 따라 두 번째 영상이 늦게 시작하거나 위치가 튀어서, 어떤 때는 전환이 되고 어떤 때는 안 되는 문제가 있었음.
+   그래서 기본은 끄고, 전환은 "앞 클립의 마지막 장면을 고정해 두고 다음 클립으로 실제 시간에 따라 서서히 바꾸는" 방식으로만 처리 (다음 영상이 얼마나 늦게 시작해도 항상 같은 결과).
+   예전 방식으로 되돌리려면 true */
+const LIVE_BLEND=false;
+const overlapLen=()=>(LIVE_BLEND&&trKind!=='none')?TR_LEN:0; // 겹쳐 재생하는 시간(초). 0이면 겹치지 않고 바로 이어짐
 function drawOverlapFrame(i,t,tIn,mov){ // mov: 다음 영상이 출발한 뒤 실제로 움직인 시간 (섞이는 정도를 정함)
   const A=clips[i],B=clips[i+1],va=vid,vb=spare;
   if(!va.videoWidth||!vb.videoWidth||va.readyState<2||vb.readyState<2)return false; // 두 영상 모두 지금 화면을 그릴 수 있을 때만 섞음. 아니면 일반 그리기로 (다음 영상 첫 화면이 아직 없는데 섞으면 검은 화면이 섞여 전환이 사라진 것처럼 보임)
@@ -744,7 +745,8 @@ const lagSamples=[]; // 재생을 시작한 뒤 영상이 실제로 움직이기
 function leadSec(){
   if(!lagSamples.length)return 0.3;
   const m=Math.max(...lagSamples.slice(-3));
-  return Math.min(1200,Math.max(50,m+30))/1000;
+  // 미리 출발한 만큼 다음 클립의 앞부분은 화면에 보이지 않으므로, 겹치지 않는 방식에서는 상한을 0.5초로 둠 (한 번 느렸던 측정값 때문에 앞부분이 크게 건너뛰어지지 않게)
+  return Math.min(LIVE_BLEND?1200:500,Math.max(50,m+30))/1000;
 }
 /* 아이폰은 사용자가 직접 시작하지 않은 영상의 소리 재생을 막아서 시도하면 거부된 뒤 다시 시도하느라 멈춤 → 영상은 항상 음소거,
    소리는 해독한 오디오로만 재생 (해독하지 못한 클립은 무음). 다른 기기는 해독하지 못한 클립만 영상 요소의 소리를 사용 */
@@ -812,7 +814,9 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
   for(let i=from;i<=last;i++){
     if(token!==runToken)return 'cancel';
     trBegin={k:-1,at:0}; // 클립이 시작될 때마다 전환 시작 시각을 새로 잡음 (같은 클립을 다시 재생해도 전환이 나옴)
+    const loadT0=performance.now();
     await loadClip(i,true); // 미리 불러둔 영상이면 즉시 교대, 아니면 불러오기만 시작하고 바로 재생을 요청
+    const loadMs=Math.round(performance.now()-loadT0); // 진단용: 이 클립(특히 사진)을 불러오는 데 걸린 시간
     vid.muted=elMuted(clips[i]); // 소리는 따로 해독한 오디오로 재생하므로 영상은 음소거
     if(token!==runToken)return 'cancel';
     if(actx&&actx.state!=='running'){try{actx.resume()}catch(e){}} // 기다리지 않음 (클립이 시작될 때마다 기다리면 그만큼 멈춤)
@@ -938,7 +942,8 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
       };
       step(gen);
     });
-    if(!isImg)diag.transitions.push({clip:i+1,방식:(i===last?'마지막 클립':(blendOk?'겹침':(inT>0?'겹침 못 그려서 이어붙임':'이어붙임')))+(retry?' (멈춰서 이 클립을 다시 재생함)':''),최장멈춤ms:Math.round(maxStill),넘어가는데ms:gapMs}); // 진단 기록
+    // 진단 기록 (사진 클립도 기록: 사진은 '사진(불러오기 N ms)'으로 표시)
+    diag.transitions.push({clip:i+1,방식:(i===last?'마지막 클립':(isImg?'사진':(blendOk?'겹침':(inT>0?'겹침 못 그려서 이어붙임':'이어붙임'))))+(isImg?` [사진 불러오기 ${loadMs}ms]`:'')+(retry?' (멈춰서 이 클립을 다시 재생함)':''),최장멈춤ms:Math.round(maxStill),넘어가는데ms:gapMs});
     prevEndAt=performance.now();
     // 겹쳐 재생하지 못하고 이어붙이는 경우(느린 기기 등): 끝나기 직전 장면 저장을 놓쳤더라도 지금 화면을 저장해서 전환이 빠지지 않게 함
     if(trKind!=='none'&&!blendOk&&i<last&&snapFor!==i&&token===runToken){
@@ -1484,11 +1489,13 @@ $('#btnExport').onclick=async()=>{
   const r=$('#expRes');r.hidden=false;r.innerHTML=`<video src="${url}" controls playsinline preload="metadata"></video>`;
   // 결과 확인용 한 줄: 녹화한 시간 / 파일에 기록된 영상 길이 / 크기 / 전환 방식 (영상이 짧거나 전환이 빠졌을 때 원인을 찾는 데 사용)
   const modes=diag.transitions.filter(x=>!x.방식.startsWith('마지막 클립')).map(x=>`${x.clip}→${x.clip+1} ${x.방식}`).join(' · ')||'-';
+  const lastE=diag.transitions[diag.transitions.length-1];
+  const lastTxt=lastE&&lastE.방식.includes('사진 불러오기')?` · ${lastE.clip}(마지막) ${lastE.방식.replace('마지막 클립','')}`:'';
   // 화면이 초당 몇 번 그려졌는지(평균)와 가장 오래 멈춘 시간. 평균이 낮으면(예: 15 미만) 전환(0.4초)에 그려지는 프레임이 너무 적어 전환이 빠진 것처럼 보임
   let gMax=0;for(let k=1;k<expT.length;k++)gMax=Math.max(gMax,expT[k]-expT[k-1]);
   const fpsTxt=expT.length>1?` · 그리기 평균 ${(expT.length/recSec).toFixed(0)}fps(최대 멈춤 ${Math.round(gMax)}ms)`:'';
   const note=document.createElement('div');note.style.cssText='font-size:12px;opacity:.85;margin-top:6px;line-height:1.5';
-  const show=d=>{note.textContent=`녹화 ${recSec.toFixed(1)}초 · 파일 영상 길이 ${isFinite(d)?d.toFixed(1)+'초':'알 수 없음'} · ${(blob.size/1048576).toFixed(1)}MB · ${type.split(';')[0]} · ${Math.round(W*q)}x${Math.round(H*q)} · 전환 ${modes}${fpsTxt}`};
+  const show=d=>{note.textContent=`녹화 ${recSec.toFixed(1)}초 · 파일 영상 길이 ${isFinite(d)?d.toFixed(1)+'초':'알 수 없음'} · ${(blob.size/1048576).toFixed(1)}MB · ${type.split(';')[0]} · ${Math.round(W*q)}x${Math.round(H*q)} · 전환 ${modes}${lastTxt}${fpsTxt}`};
   show(NaN);r.appendChild(note);
   const rv=r.querySelector('video');rv.addEventListener('loadedmetadata',()=>show(rv.duration));
 };
@@ -1500,7 +1507,7 @@ function diagText(){
   const L=[];
   L.push(`기기: ${isIOS?'아이폰/아이패드':'그 외'} / ${/Safari/.test(navigator.userAgent)&&!/Chrome|CriOS/.test(navigator.userAgent)?'Safari':(/CriOS|Chrome/.test(navigator.userAgent)?'Chrome':'기타')}`);
   L.push(`영상 요소: ${useSingle?'하나만 사용(안전 모드)':'두 개 사용(겹쳐 재생)'}${useSingle&&diagInfo.single?' — 이유: '+diagInfo.single:''}`);
-  L.push(`전환: ${TRANS.find(x=>x[0]===trKind)[1]} / 겹침 ${overlapLen()}초`);
+  L.push(`전환: ${TRANS.find(x=>x[0]===trKind)[1]} / ${LIVE_BLEND?`두 영상 겹침 ${overlapLen()}초`:'고정 장면 + 실시간 전환 방식'} ${Math.round(TR_LEN*1000)}ms`);
   L.push(`클립: 영상 ${v}개, 사진 ${p}개 (길이 ${clips.map(c=>(+c.dur||0).toFixed(1)).join(', ')}초)`);
   L.push(`소리 준비: ${clips.filter(c=>c.kind!=='image').map(c=>hasBuf(c)?(c.pcm?'성공(녹음)':'성공(해독)'):(abuf.get(c.id)==='pending'?'진행중':(isIOS?'실패→보조 오디오':'실패→영상 소리 사용'))).join(', ')||'-'}`);
   L.push(`영상 시작 지연(ms): ${lagSamples.map(Math.round).join(', ')||'아직 측정 전'} → 미리 출발 ${Math.round(leadSec()*1000)}ms 전`);
@@ -1509,7 +1516,7 @@ function diagText(){
   L.push('가장 최근 재생(클립별):');
   if(!diag.transitions.length)L.push('  아직 재생 기록이 없어요. 재생한 뒤 다시 열어 주세요.');
   // 방식은 "이 클립이 끝나고 다음 클립으로 넘어갈 때"의 방식 (겹침 = 두 영상을 섞어서 전환, 이어붙임 = 앞 장면을 얼렸다가 서서히 바꿈)
-  diag.transitions.forEach(x=>L.push(`  클립 ${x.clip}${x.방식.startsWith('마지막 클립')?' (마지막)'+(x.방식.includes('다시')?' — 멈춰서 다시 재생함':''):`→${x.clip+1}: ${x.방식}`}${x.넘어가는데ms>=0?`, 이 클립은 앞 클립이 끝난 뒤 ${x.넘어가는데ms}ms 만에 움직임`:''}, 두 영상이 함께 멈춘 최장 ${x.최장멈춤ms}ms`));
+  diag.transitions.forEach(x=>L.push(`  클립 ${x.clip}${x.방식.startsWith('마지막 클립')?' (마지막)'+(x.방식.includes('[')?' '+x.방식.slice(x.방식.indexOf('[')):'')+(x.방식.includes('다시')?' — 멈춰서 다시 재생함':''):`→${x.clip+1}: ${x.방식}`}${x.넘어가는데ms>=0?`, 이 클립은 앞 클립이 끝난 뒤 ${x.넘어가는데ms}ms 만에 움직임`:''}, 두 영상이 함께 멈춘 최장 ${x.최장멈춤ms}ms`));
   return L.join('\n');
 }
 (()=>{
