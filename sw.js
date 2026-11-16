@@ -1,9 +1,14 @@
 // 추억은방울방울 서비스 워커: 앱 파일은 네트워크 우선(업데이트 즉시 반영), 오프라인이면 캐시. 글꼴은 캐시해 두고 재사용.
-const V = 'bangul-v3';
+// 네트워크에서 받을 때 브라우저의 임시 저장(HTTP 캐시)을 거치지 않고 서버에 항상 확인(cache:'no-cache') → 예전 버전이 남아 보이는 일을 줄임.
+const V = 'bangul-v4';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png?v=3', './icon-512.png?v=3'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(V).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));
+  e.waitUntil(
+    caches.open(V)
+      .then(c => Promise.all(CORE.map(u => c.add(new Request(u, { cache: 'reload' })))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', e => {
@@ -32,7 +37,7 @@ self.addEventListener('fetch', e => {
 
   if (u.origin === location.origin) {
     e.respondWith(
-      fetch(req)
+      fetch(req, { cache: 'no-cache' })
         .then(r => { const copy = r.clone(); caches.open(V).then(c => c.put(req, copy)); return r; })
         .catch(() => caches.match(req).then(m => m || caches.match('./index.html')))
     );
