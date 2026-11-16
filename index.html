@@ -227,7 +227,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 
 <script>
 'use strict';
-const APP_VER='2026-11-16 G'; // 어떤 버전이 실행 중인지 확인용 (진단 화면과 내보내기 결과 줄에 표시). 수정할 때마다 올림
+const APP_VER='2026-11-16 H'; // 어떤 버전이 실행 중인지 확인용 (진단 화면과 내보내기 결과 줄에 표시). 수정할 때마다 올림
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); // 사용자가 입력한 글자를 HTML에 넣을 때 깨지지 않게 변환
 const W=720,H=1280;
@@ -729,12 +729,15 @@ function preloadNext(i){
   // 아이폰은 재생하기 전에는 영상을 미리 불러오지 않으므로, 음소거로 잠깐 재생했다가 멈춰 두어 첫 화면까지 준비시킴
   // (미리 출발이 이미 시작됐으면 멈추지 않음)
   // 재생 시작 응답(play 약속)이 늦거나 오지 않아도 준비용 영상이 계속 재생되지 않게, 0.5초 뒤 한 번 더 멈춤을 확인
-  setTimeout(()=>{if(spareIdx===i&&prerolledIdx!==i&&!spare.paused){try{spare.pause()}catch(e){}spare.muted=true}},500);
+  // 멈춘 뒤에도 위치가 조금 넘게(0.12초 초과) 진행되어 있으면 지금(사진·앞 영상이 보이는 동안, 눈에 안 보일 때) 처음으로 되감아 둠.
+  // 클립이 시작되는 순간에 되감으면 아이폰은 되감기에 1.6초 가까이 걸려 화면이 멈춘 것처럼 보임 (진단의 '시작 위치가 늦어 되감음'과 1600ms 지연이 함께 나타나던 원인)
+  const rewindIfDrifted=()=>{if(spareIdx===i&&prerolledIdx!==i&&spare.currentTime>0.12){try{spare.currentTime=0}catch(e){}}};
+  setTimeout(()=>{if(spareIdx===i&&prerolledIdx!==i&&!spare.paused){try{spare.pause()}catch(e){}spare.muted=true;rewindIfDrifted()}},500);
   try{
     const w=spare.play();
     if(w&&w.then)w.then(()=>{
-      // 0초로 되감지 않고 그 자리에서 멈춰 둠: 아이폰은 되감기(탐색)가 느리고, 되감으면 준비해 둔 상태가 사라져 재생 시작이 다시 늦어짐
-      if(spareIdx===i&&prerolledIdx!==i){spare.pause();spare.muted=elMuted(c)}
+      // 대기 중에는 그 자리에서 멈춰 둠. 단, 이미 많이 진행되어 있으면 위처럼 되감음
+      if(spareIdx===i&&prerolledIdx!==i){spare.pause();spare.muted=elMuted(c);rewindIfDrifted()}
     }).catch(()=>{});
   }catch(e){}
 }
@@ -910,7 +913,7 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
           endT=t;if(firstT<0)firstT=t;
           // 새로 시작한 영상(사진 뒤 등)이 처음 확인한 위치가 0.5초를 넘으면 앞부분이 건너뛰어진 것 → 처음으로 되감고 소리도 처음부터 다시 시작 (최대 2번).
           // (미리 준비해 둔 영상이 진행된 채 교대되거나, 처음으로 되감기가 무시된 경우. 아이폰 진단에서 8번 클립이 1.0초 지점부터 시작하던 문제)
-          if(!isImg&&!wasPre&&!(i===from&&startAt>0)&&reseeked<2&&firstT>0.5&&t>0.5){
+          if(!isImg&&!wasPre&&!(i===from&&startAt>0)&&reseeked<2&&firstT>0.5&&t>0.5&&!vid.seeking){ // 되감기가 이미 진행 중이면(seeking) 다시 요청하지 않음: 아이폰은 되감기를 다시 요청하면 처음부터 다시 걸려 더 오래 멈춤
             reseeked++;firstT=-1;
             try{vid.currentTime=0}catch(e){}
             stopClipAudio(i);startClipAudio(i,0);
