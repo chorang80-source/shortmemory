@@ -227,7 +227,7 @@ input[type=color]{width:44px;height:32px;padding:0;border:2px solid var(--line);
 
 <script>
 'use strict';
-const APP_VER='2026-11-16 F'; // 어떤 버전이 실행 중인지 확인용 (진단 화면과 내보내기 결과 줄에 표시). 수정할 때마다 올림
+const APP_VER='2026-11-16 G'; // 어떤 버전이 실행 중인지 확인용 (진단 화면과 내보내기 결과 줄에 표시). 수정할 때마다 올림
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); // 사용자가 입력한 글자를 HTML에 넣을 때 깨지지 않게 변환
 const W=720,H=1280;
@@ -861,6 +861,7 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
     let retry=false,endT=0,inT=0,maxStill=0; // inT: 겹쳐 재생하다 넘어가는 순간 다음 클립이 이미 재생된 시간, maxStill: 두 영상이 모두 멈춰 있던 가장 긴 시간(ms)
     let firstT=-1; // 이 클립에서 처음 확인한 재생 위치(초). 0에 가까워야 하고, 크면 앞부분이 건너뛰어진 것
     let resumed=0; // 영상이 기록된 길이보다 한참 일찍 "끝났다"고 알려서 다시 이어 재생한 횟수 (진단용)
+    let reseeked=0; // 영상이 처음(0초)이 아닌 곳에서 시작해서 처음으로 되감은 횟수 (진단용)
     let gapMs=-1,t0clip=-1; // gapMs: 앞 클립이 끝난 뒤 이 클립이 실제로 움직이기까지 걸린 시간(ms)
     await new Promise(res=>{
       let finished=false,lastT=-1,lastAdv=performance.now(),stalls=0,gen=0,pre=false,preTimer=null,endedAt=0;
@@ -907,6 +908,13 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
         try{
           const t=isImg?(performance.now()-tStart)/1000:vid.currentTime;
           endT=t;if(firstT<0)firstT=t;
+          // 새로 시작한 영상(사진 뒤 등)이 처음 확인한 위치가 0.5초를 넘으면 앞부분이 건너뛰어진 것 → 처음으로 되감고 소리도 처음부터 다시 시작 (최대 2번).
+          // (미리 준비해 둔 영상이 진행된 채 교대되거나, 처음으로 되감기가 무시된 경우. 아이폰 진단에서 8번 클립이 1.0초 지점부터 시작하던 문제)
+          if(!isImg&&!wasPre&&!(i===from&&startAt>0)&&reseeked<2&&firstT>0.5&&t>0.5){
+            reseeked++;firstT=-1;
+            try{vid.currentTime=0}catch(e){}
+            stopClipAudio(i);startClipAudio(i,0);
+          }
           const nowT=performance.now();
           if(exporting)expT.push(nowT);
           if(!isImg&&prevEndAt&&i>from&&gapMs<0){ // 앞 클립이 끝난 뒤 이 클립이 움직이기 시작하기까지 (재생 요청을 기다린 시간 포함)
@@ -981,7 +989,7 @@ async function playRange(from,only,startAt=0){ // startAt: 첫 클립을 이 시
     // 진단 기록 (사진 클립도 기록: 사진은 '사진(불러오기 N ms)'으로 표시). 실제 재생 구간(처음 위치→끝 위치 / 클립 길이)도 기록해서 건너뛴 구간이 있으면 ⚠로 표시
     const cd=+clips[i].dur||0,ft=firstT<0?0:firstT;
     const skipped=cd>0&&(endT<cd-0.7||ft>0.8); // 끝까지 못 보고 넘어갔거나(0.7초 넘게 모자람), 앞부분이 0.8초 넘게 건너뛰어짐
-    const playTxt=` {재생 ${ft.toFixed(1)}→${endT.toFixed(1)}/${cd.toFixed(1)}초${skipped?' ⚠건너뜀':''}${resumed?` · 일찍 끝났다는 신호 ${resumed}번 무시`:''}}`;
+    const playTxt=` {재생 ${ft.toFixed(1)}→${endT.toFixed(1)}/${cd.toFixed(1)}초${skipped?' ⚠건너뜀':''}${resumed?` · 일찍 끝났다는 신호 ${resumed}번 무시`:''}${reseeked?` · 시작 위치가 늦어 처음으로 되감음 ${reseeked}번`:''}}`;
     diag.transitions.push({clip:i+1,방식:(i===last?'마지막 클립':(isImg?'사진':(blendOk?'겹침':(inT>0?'겹침 못 그려서 이어붙임':'이어붙임'))))+(isImg?` [사진 불러오기 ${loadMs}ms]`:'')+playTxt+(retry?' (멈춰서 이 클립을 다시 재생함)':''),최장멈춤ms:Math.round(maxStill),넘어가는데ms:gapMs});
     prevEndAt=performance.now();
     // 겹쳐 재생하지 못하고 이어붙이는 경우(느린 기기 등): 끝나기 직전 장면 저장을 놓쳤더라도 지금 화면을 저장해서 전환이 빠지지 않게 함
